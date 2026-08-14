@@ -92,6 +92,8 @@
   <button id="btnCopy">F · copy (production logic)</button>
   <button id="btnCopyLegacy" class="ghost">G · copy via execCommand only</button>
   <button id="btnCopyAsync" class="ghost">H · copy via navigator.clipboard only</button>
+  <button id="btnVerify" class="quiet">I · read the clipboard back and check it</button>
+  <p class="note">“COPIED” above only means the API did not complain. This reads the clipboard and compares it — the only real proof. iOS may ask for permission to paste; allow it.</p>
 </div>
 
 <h2>Log</h2>
@@ -115,13 +117,14 @@
     { name: 'Viber', pattern: /\bViber\//i }
   ];
 
-  var WATCHDOG_MS = 1500;
+  var WATCHDOG_MS = 8000;
 
   var ua = navigator.userAgent || '';
   var lines = [];
   var lastActionAt = 0;
   var lastActionName = '';
   var watchdog = null;
+  var watched = null;
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
 
@@ -279,24 +282,38 @@
     if (watchdog) clearTimeout(watchdog);
 
     if (typeof document.hidden === 'undefined') {
+      watched = null;
       log('WATCHDOG: document.hidden unsupported here, cannot tell whether the hop happened');
       return;
     }
 
+    watched = { name: name, settled: false, verdict: false };
+
     watchdog = setTimeout(function () {
       watchdog = null;
-      if (!document.hidden) {
-        log('WATCHDOG: still visible after ' + WATCHDOG_MS + 'ms'
-          + ' -> ' + name + ' did NOT leave the webview');
+      if (!document.hidden && watched && !watched.settled) {
+        watched.verdict = true;
+        log('WATCHDOG: no hop yet after ' + WATCHDOG_MS + 'ms for ' + name
+          + '. If the system showed a confirmation or a browser chooser, this only means'
+          + ' it was not confirmed yet -- the hop is still being watched for.');
       }
     }, WATCHDOG_MS);
   }
 
   function noteHop(source) {
+    if (!watched || watched.settled) return;
+    watched.settled = true;
+
     if (watchdog) {
       clearTimeout(watchdog);
       watchdog = null;
-      log('WATCHDOG: cleared by ' + source + ' -> something took over, the hop worked');
+      log('WATCHDOG: ' + watched.name + ' LEFT the webview (' + source + ')');
+      return;
+    }
+
+    if (watched.verdict) {
+      log('WATCHDOG: LATE HOP -- ' + watched.name + ' DID leave the webview (' + source + '),'
+        + ' just later than the timeout above');
     }
   }
 
@@ -379,6 +396,35 @@
     }, function (error) {
       log('async clipboard rejected: ' + error);
       reportCopy('async clipboard (forced)', false, text);
+    });
+  });
+
+  onTap('btnVerify', 'I verify clipboard', function () {
+    var clipboard = navigator.clipboard;
+    if (!clipboard || typeof clipboard.readText !== 'function') {
+      log('clipboard.readText unavailable -- paste into a notes app by hand to check');
+      return;
+    }
+    var settled = false;
+    setTimeout(function () {
+      if (!settled) {
+        log('clipboard.readText never answered -- a permission prompt is probably pending,'
+          + ' or reading is blocked here. Paste into a notes app by hand instead.');
+      }
+    }, 5000);
+
+    clipboard.readText().then(function (value) {
+      settled = true;
+      log('clipboard actually holds ' + value.length + ' chars');
+      log('clipboard starts with: ' + value.slice(0, 70));
+      if (value === baseUrl()) {
+        log('MATCH: the clipboard is exactly this page url');
+        return;
+      }
+      log('DIFFERENT from the page url -- either it holds the log, or the copy silently failed');
+    }, function (error) {
+      settled = true;
+      log('clipboard.readText rejected: ' + error);
     });
   });
 
