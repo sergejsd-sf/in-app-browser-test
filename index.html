@@ -52,6 +52,7 @@
     color: #1a1d1f;
   }
   textarea { height: 220px; white-space: pre; }
+  #log { font-size: 14px; }
   .note { font-size: 13px; color: #6b7280; margin: 6px 0 0; }
   summary { font-size: 13px; font-weight: 600; color: #6b7280; cursor: pointer; }
   details[open] summary { margin-bottom: 6px; }
@@ -130,15 +131,19 @@
       + '.' + String(d.getMilliseconds() + 1000).slice(1);
   }
 
+  function renderLog() {
+    var box = document.getElementById('log');
+    box.value = lines.join('\n');
+    box.scrollTop = box.scrollHeight;
+  }
+
   function log(message) {
     var since = '';
     if (lastActionAt) {
       since = ' (+' + (new Date().getTime() - lastActionAt) + 'ms after ' + lastActionName + ')';
     }
     lines.push(stamp() + '  ' + message + since);
-    var box = document.getElementById('log');
-    box.value = lines.join('\n');
-    box.scrollTop = box.scrollHeight;
+    renderLog();
   }
 
   function markAction(name) {
@@ -146,6 +151,7 @@
     lastActionName = name;
     lines.push('');
     lines.push(stamp() + '  --- TAP ' + name + ' ---');
+    renderLog();
   }
 
   function detectInAppBrowser() {
@@ -239,21 +245,15 @@
     input.value = text;
     input.setAttribute('readonly', 'readonly');
     input.contentEditable = 'true';
-    input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+    input.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:120px;'
+      + 'font-size:16px;opacity:0;pointer-events:none;';
     document.body.appendChild(input);
 
     var copied = false;
     try {
-      var selection = window.getSelection();
-      if (selection) {
-        var range = document.createRange();
-        range.selectNodeContents(input);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
+      input.focus();
       input.setSelectionRange(0, text.length);
       copied = document.execCommand('copy') === true;
-      if (selection) selection.removeAllRanges();
     } catch (error) {
       log('execCommand threw: ' + error);
       copied = false;
@@ -267,10 +267,11 @@
     document.getElementById('copyState').innerHTML = text;
   }
 
-  function reportCopy(label, succeeded) {
-    log(label + ' -> ' + (succeeded ? 'COPIED' : 'FAILED'));
+  function reportCopy(label, succeeded, text) {
+    var size = text ? text.length : 0;
+    log(label + ' -> ' + (succeeded ? 'COPIED ' + size + ' chars' : 'FAILED') + ' (source was ' + size + ' chars)');
     setCopyState(succeeded
-      ? '<span class="ok">copied &mdash; paste it somewhere to confirm</span>'
+      ? '<span class="ok">copied ' + size + ' chars &mdash; paste it and check the length matches</span>'
       : '<span class="no">failed &mdash; select the field above and copy by hand</span>');
   }
 
@@ -345,37 +346,39 @@
     if (hasAsyncClipboard()) {
       log('using navigator.clipboard.writeText');
       navigator.clipboard.writeText(text).then(function () {
-        reportCopy('async clipboard', true);
+        reportCopy('async clipboard', true, text);
       }, function (error) {
         log('async clipboard rejected: ' + error);
-        reportCopy('async clipboard', false);
+        reportCopy('async clipboard', false, text);
       });
       return;
     }
     log('no async clipboard, using execCommand');
-    reportCopy('execCommand', copyViaExecCommand(text));
+    reportCopy('execCommand', copyViaExecCommand(text), text);
   });
 
   onTap('btnCopyLegacy', 'G copy execCommand only', function () {
+    var text = baseUrl();
     if (!hasLegacyClipboard()) {
       log('document.execCommand is not a function');
-      reportCopy('execCommand', false);
+      reportCopy('execCommand', false, text);
       return;
     }
-    reportCopy('execCommand (forced)', copyViaExecCommand(baseUrl()));
+    reportCopy('execCommand (forced)', copyViaExecCommand(text), text);
   });
 
   onTap('btnCopyAsync', 'H copy async only', function () {
+    var text = baseUrl();
     if (!hasAsyncClipboard()) {
       log('navigator.clipboard.writeText is unavailable');
-      reportCopy('async clipboard', false);
+      reportCopy('async clipboard', false, text);
       return;
     }
-    navigator.clipboard.writeText(baseUrl()).then(function () {
-      reportCopy('async clipboard (forced)', true);
+    navigator.clipboard.writeText(text).then(function () {
+      reportCopy('async clipboard (forced)', true, text);
     }, function (error) {
       log('async clipboard rejected: ' + error);
-      reportCopy('async clipboard (forced)', false);
+      reportCopy('async clipboard (forced)', false, text);
     });
   });
 
@@ -383,17 +386,14 @@
     var text = lines.join('\n');
     if (hasAsyncClipboard()) {
       navigator.clipboard.writeText(text).then(function () {
-        setCopyState('<span class="ok">log copied</span>');
-      }, function () {
-        setCopyState('<span class="no">could not copy the log &mdash; select the text area by hand</span>');
+        reportCopy('log via async clipboard', true, text);
+      }, function (error) {
+        log('async clipboard rejected: ' + error);
+        reportCopy('log via async clipboard', false, text);
       });
       return;
     }
-    if (copyViaExecCommand(text)) {
-      setCopyState('<span class="ok">log copied</span>');
-      return;
-    }
-    setCopyState('<span class="no">could not copy the log &mdash; select the text area by hand</span>');
+    reportCopy('log via execCommand', copyViaExecCommand(text), text);
   });
 
   onTap('btnReset', 'clear log', function () {
