@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>In-app browser escape test</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: #f2f4f5;
+    color: #1a1d1f;
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; margin: 24px 0 8px; }
+  .card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .row { display: block; border-bottom: 1px solid #eef0f1; padding: 6px 0; }
+  .row:last-child { border-bottom: 0; }
+  .k { color: #6b7280; font-size: 13px; }
+  .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+  .ok { color: #067647; font-weight: 600; }
+  .no { color: #b42318; font-weight: 600; }
+  button {
+    display: block;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 15px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: #ffcf10;
+    color: #1a1d1f;
+    font-size: 17px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    -webkit-appearance: none;
+  }
+  button.ghost { background: #fff; border: 2px solid #ffcf10; }
+  button.quiet { background: #e5e7eb; font-size: 15px; font-weight: 500; }
+  input, textarea {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #fff;
+    color: #1a1d1f;
+  }
+  textarea { height: 220px; white-space: pre; }
+  .note { font-size: 13px; color: #6b7280; margin: 6px 0 0; }
+  summary { font-size: 13px; font-weight: 600; color: #6b7280; cursor: pointer; }
+  details[open] summary { margin-bottom: 6px; }
+  .tag { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #e5e7eb; }
+</style>
+</head>
+<body>
+
+<h1>In-app browser escape test</h1>
+<p class="note">Open this page inside Facebook / Instagram / Messenger / TikTok / Viber and work top to bottom. Every tap is logged at the bottom — copy the log and send it back.</p>
+<h2>Detection</h2>
+<div class="card" id="detect"></div>
+<details class="card">
+  <summary>raw values &mdash; url, user agent, intent strings</summary>
+  <div id="raw"></div>
+</details>
+
+<h2>Leave the webview (Android)</h2>
+<div class="card">
+  <button id="btnBrowsable">A · intent:// BROWSABLE <span class="tag">shipped</span></button>
+  <button id="btnChrome" class="ghost">B · intent:// package=com.android.chrome</button>
+  <button id="btnBlank" class="ghost">C · window.open(https, _blank)</button>
+  <p class="note">A is what the app is about to ship. B and C are only for comparison &mdash; if A fails and B works, the recipe needs changing.</p>
+</div>
+
+<h2>Leave the webview (iOS experiments)</h2>
+<div class="card">
+  <button id="btnSafari">D · x-safari-https://</button>
+  <button id="btnChromeIos" class="ghost">E · googlechromes://</button>
+  <p class="note">Both are undocumented. Expected to do nothing in Facebook / Instagram &mdash; the point is to find out for certain instead of assuming.</p>
+</div>
+
+<h2>Copy the link</h2>
+<div class="card">
+  <input id="url" readonly>
+  <p class="note" id="copyState">&nbsp;</p>
+  <button id="btnCopy">F · copy (production logic)</button>
+  <button id="btnCopyLegacy" class="ghost">G · copy via execCommand only</button>
+  <button id="btnCopyAsync" class="ghost">H · copy via navigator.clipboard only</button>
+</div>
+
+<h2>Log</h2>
+<div class="card">
+  <textarea id="log" readonly></textarea>
+  <button id="btnCopyLog" class="quiet" style="margin-top:10px">Copy the whole log</button>
+  <button id="btnReset" class="quiet">Clear log</button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var IN_APP_PATTERNS = [
+    { name: 'Messenger', pattern: /\bMessenger(ForiOS|LiteForiOS)\b|FB_IAB\/Orca-Android/i },
+    { name: 'Facebook', pattern: /\bFB\w+\/|\bMetaIAB\b/i },
+    { name: 'Instagram', pattern: /\bInstagram/i },
+    { name: 'TikTok', pattern: /musical_ly|Bytedance|TikTok/i },
+    { name: 'WeChat', pattern: /\bMicroMessenger\//i },
+    { name: 'WhatsApp', pattern: /\bWAiOS\//i },
+    { name: 'Viber', pattern: /\bViber\//i }
+  ];
+
+  var WATCHDOG_MS = 1500;
+
+  var ua = navigator.userAgent || '';
+  var lines = [];
+  var lastActionAt = 0;
+  var lastActionName = '';
+  var watchdog = null;
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+
+  function stamp() {
+    var d = new Date();
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
+      + '.' + String(d.getMilliseconds() + 1000).slice(1);
+  }
+
+  function log(message) {
+    var since = '';
+    if (lastActionAt) {
+      since = ' (+' + (new Date().getTime() - lastActionAt) + 'ms after ' + lastActionName + ')';
+    }
+    lines.push(stamp() + '  ' + message + since);
+    var box = document.getElementById('log');
+    box.value = lines.join('\n');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function markAction(name) {
+    lastActionAt = new Date().getTime();
+    lastActionName = name;
+    lines.push('');
+    lines.push(stamp() + '  --- TAP ' + name + ' ---');
+  }
+
+  function detectInAppBrowser() {
+    for (var i = 0; i < IN_APP_PATTERNS.length; i += 1) {
+      if (IN_APP_PATTERNS[i].pattern.test(ua)) return IN_APP_PATTERNS[i].name;
+    }
+    return null;
+  }
+
+  function platform() {
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPhone|Apple-iPhone|iPad|iPod/i.test(ua)) return 'ios';
+    return 'other';
+  }
+
+  function hasAsyncClipboard() {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return false;
+    return typeof navigator.clipboard.writeText === 'function';
+  }
+
+  function hasLegacyClipboard() {
+    return typeof document !== 'undefined' && typeof document.execCommand === 'function';
+  }
+
+  function isTopLevel() {
+    try { return window.top === window; } catch (e) { return false; }
+  }
+
+  function yesNo(value) {
+    return '<span class="' + (value ? 'ok' : 'no') + '">' + (value ? 'yes' : 'no') + '</span>';
+  }
+
+  function row(key, value) {
+    return '<div class="row"><div class="k">' + key + '</div><div class="v">' + value + '</div></div>';
+  }
+
+  function baseUrl() {
+    return window.location.protocol + '//' + window.location.host
+      + window.location.pathname + window.location.search;
+  }
+
+  function intentBrowsable() {
+    return 'intent://' + window.location.host + window.location.pathname + window.location.search
+      + '#Intent;scheme=https;action=android.intent.action.VIEW;'
+      + 'category=android.intent.category.BROWSABLE;end';
+  }
+
+  function safariUrl() {
+    return 'x-safari-https://' + window.location.host
+      + window.location.pathname + window.location.search;
+  }
+
+  function chromeIosUrl() {
+    return 'googlechromes://' + window.location.host
+      + window.location.pathname + window.location.search;
+  }
+
+  function intentChrome() {
+    return 'intent://' + window.location.host + window.location.pathname + window.location.search
+      + '#Intent;scheme=https;package=com.android.chrome;'
+      + 'S.browser_fallback_url=' + encodeURIComponent(baseUrl()) + ';end';
+  }
+
+  var detected = detectInAppBrowser();
+  var plat = platform();
+
+  document.getElementById('detect').innerHTML = ''
+    + row('detected in-app browser', detected ? '<b>' + detected + '</b>' : '<span class="no">none (looks like a real browser)</span>')
+    + row('platform', plat)
+    + row('navigator.clipboard.writeText', yesNo(hasAsyncClipboard()))
+    + row('document.execCommand', yesNo(hasLegacyClipboard()));
+
+  document.getElementById('raw').innerHTML = ''
+    + row('location.href', baseUrl())
+    + row('user agent', ua)
+    + row('intent A (BROWSABLE)', intentBrowsable())
+    + row('intent B (chrome)', intentChrome());
+
+  document.getElementById('url').value = baseUrl();
+
+  log('page loaded');
+  log('in-app browser: ' + (detected || 'none') + ', platform: ' + plat);
+  log('ua: ' + ua);
+  log('asyncClipboard=' + hasAsyncClipboard() + ' execCommand=' + hasLegacyClipboard()
+    + ' secureContext=' + window.isSecureContext + ' topLevel=' + isTopLevel());
+
+  function copyViaExecCommand(text) {
+    if (!hasLegacyClipboard() || !document.body) return false;
+
+    var input = document.createElement('textarea');
+    input.value = text;
+    input.setAttribute('readonly', 'readonly');
+    input.contentEditable = 'true';
+    input.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+    document.body.appendChild(input);
+
+    var copied = false;
+    try {
+      var selection = window.getSelection();
+      if (selection) {
+        var range = document.createRange();
+        range.selectNodeContents(input);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      input.setSelectionRange(0, text.length);
+      copied = document.execCommand('copy') === true;
+      if (selection) selection.removeAllRanges();
+    } catch (error) {
+      log('execCommand threw: ' + error);
+      copied = false;
+    }
+
+    document.body.removeChild(input);
+    return copied;
+  }
+
+  function setCopyState(text) {
+    document.getElementById('copyState').innerHTML = text;
+  }
+
+  function reportCopy(label, succeeded) {
+    log(label + ' -> ' + (succeeded ? 'COPIED' : 'FAILED'));
+    setCopyState(succeeded
+      ? '<span class="ok">copied &mdash; paste it somewhere to confirm</span>'
+      : '<span class="no">failed &mdash; select the field above and copy by hand</span>');
+  }
+
+  function armWatchdog(name) {
+    if (watchdog) clearTimeout(watchdog);
+
+    if (typeof document.hidden === 'undefined') {
+      log('WATCHDOG: document.hidden unsupported here, cannot tell whether the hop happened');
+      return;
+    }
+
+    watchdog = setTimeout(function () {
+      watchdog = null;
+      if (!document.hidden) {
+        log('WATCHDOG: still visible after ' + WATCHDOG_MS + 'ms'
+          + ' -> ' + name + ' did NOT leave the webview');
+      }
+    }, WATCHDOG_MS);
+  }
+
+  function noteHop(source) {
+    if (watchdog) {
+      clearTimeout(watchdog);
+      watchdog = null;
+      log('WATCHDOG: cleared by ' + source + ' -> something took over, the hop worked');
+    }
+  }
+
+  function onTap(id, name, handler, watch) {
+    document.getElementById(id).addEventListener('click', function () {
+      markAction(name);
+      if (watch) armWatchdog(name);
+      try {
+        handler();
+      } catch (error) {
+        log('handler threw: ' + error);
+      }
+    });
+  }
+
+  onTap('btnBrowsable', 'A intent BROWSABLE', function () {
+    var url = intentBrowsable();
+    log('navigating to ' + url);
+    window.location.href = url;
+  }, true);
+
+  onTap('btnChrome', 'B intent chrome', function () {
+    var url = intentChrome();
+    log('navigating to ' + url);
+    window.location.href = url;
+  }, true);
+
+  onTap('btnBlank', 'C window.open _blank', function () {
+    var opened = window.open(baseUrl(), '_blank');
+    log('window.open returned ' + (opened ? 'a window object' : String(opened)));
+  }, true);
+
+  onTap('btnSafari', 'D x-safari-https', function () {
+    var url = safariUrl();
+    log('navigating to ' + url);
+    window.location.href = url;
+  }, true);
+
+  onTap('btnChromeIos', 'E googlechromes', function () {
+    var url = chromeIosUrl();
+    log('navigating to ' + url);
+    window.location.href = url;
+  }, true);
+
+  onTap('btnCopy', 'F copy production logic', function () {
+    var text = baseUrl();
+    if (hasAsyncClipboard()) {
+      log('using navigator.clipboard.writeText');
+      navigator.clipboard.writeText(text).then(function () {
+        reportCopy('async clipboard', true);
+      }, function (error) {
+        log('async clipboard rejected: ' + error);
+        reportCopy('async clipboard', false);
+      });
+      return;
+    }
+    log('no async clipboard, using execCommand');
+    reportCopy('execCommand', copyViaExecCommand(text));
+  });
+
+  onTap('btnCopyLegacy', 'G copy execCommand only', function () {
+    if (!hasLegacyClipboard()) {
+      log('document.execCommand is not a function');
+      reportCopy('execCommand', false);
+      return;
+    }
+    reportCopy('execCommand (forced)', copyViaExecCommand(baseUrl()));
+  });
+
+  onTap('btnCopyAsync', 'H copy async only', function () {
+    if (!hasAsyncClipboard()) {
+      log('navigator.clipboard.writeText is unavailable');
+      reportCopy('async clipboard', false);
+      return;
+    }
+    navigator.clipboard.writeText(baseUrl()).then(function () {
+      reportCopy('async clipboard (forced)', true);
+    }, function (error) {
+      log('async clipboard rejected: ' + error);
+      reportCopy('async clipboard (forced)', false);
+    });
+  });
+
+  onTap('btnCopyLog', 'copy log', function () {
+    var text = lines.join('\n');
+    if (hasAsyncClipboard()) {
+      navigator.clipboard.writeText(text).then(function () {
+        setCopyState('<span class="ok">log copied</span>');
+      }, function () {
+        setCopyState('<span class="no">could not copy the log &mdash; select the text area by hand</span>');
+      });
+      return;
+    }
+    if (copyViaExecCommand(text)) {
+      setCopyState('<span class="ok">log copied</span>');
+      return;
+    }
+    setCopyState('<span class="no">could not copy the log &mdash; select the text area by hand</span>');
+  });
+
+  onTap('btnReset', 'clear log', function () {
+    lines = [];
+    lastActionAt = 0;
+    document.getElementById('log').value = '';
+  });
+
+  document.getElementById('url').addEventListener('focus', function (event) {
+    try {
+      event.target.setSelectionRange(0, event.target.value.length);
+    } catch (error) {
+      event.target.select();
+    }
+  });
+
+  document.addEventListener('visibilitychange', function () {
+    log('visibilitychange -> ' + (document.hidden ? 'HIDDEN (something took over)' : 'visible (came back)'));
+    if (document.hidden) noteHop('visibilitychange');
+  });
+
+  window.addEventListener('pagehide', function () {
+    log('pagehide');
+    noteHop('pagehide');
+  });
+  window.addEventListener('blur', function () { log('blur'); });
+  window.addEventListener('focus', function () { log('focus'); });
+
+  window.onerror = function (message, source, line) {
+    log('window.onerror: ' + message + ' @' + line);
+    return false;
+  };
+
+  window.addEventListener('unhandledrejection', function (event) {
+    log('unhandledrejection: ' + (event.reason || 'unknown'));
+  });
+}());
+</script>
+
+</body>
+</html>
