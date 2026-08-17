@@ -52,7 +52,13 @@
     color: #1a1d1f;
   }
   textarea { height: 220px; white-space: pre; }
-  .replica-stage { height: 60vh; border: 1px dashed #d1d5db; border-radius: 8px; }
+  .replica-stage {
+    height: 60vh;
+    border: 3px dashed #b42318;
+    border-radius: 8px;
+    background: #fff;
+  }
+  .replica-label { font-size: 12px; font-weight: 700; color: #b42318; margin: 10px 0 4px; }
   .replica .capture-area-container {
     display: flex;
     flex-direction: column;
@@ -146,6 +152,7 @@
 <h2>The widget, copied 1:1</h2>
 <div class="card">
   <button id="btnReplica">M &middot; exact markup and css, no height of its own</button>
+  <p class="replica-label">&darr; INSIDE THE RED DASHED BOX &darr;</p>
   <div class="replica-stage replica">
     <div class="capture-area-container">
       <div class="capture-area-message__impossible">Take a photo of your document</div>
@@ -209,6 +216,7 @@
   ];
 
   var WATCHDOG_MS = 8000;
+  var BUILD = 8;
 
   var ua = navigator.userAgent || '';
   var lines = [];
@@ -400,7 +408,7 @@
   var signals = uaSignals();
   var cameraApi = cameraApiPresence();
 
-  log('page loaded');
+  log('page loaded -- BUILD ' + BUILD + ' (buttons A-M; M is the 1:1 widget replica)');
   log('in-app browser (name patterns): ' + (detected || 'none') + ', platform: ' + plat);
   log('ua: ' + ua);
   log('UA RULE -- hasVersion=' + signals.hasVersion + ' hasSafari=' + signals.hasSafari
@@ -706,9 +714,14 @@
           log('REPLICA VERDICT: laid out fine here -- ' + Math.round(videoBox.height)
             + 'px tall, so this device does not reproduce the bug');
         }
-
-        stream.getTracks().forEach(function (t) { t.stop(); });
       }, 1500);
+
+      setTimeout(function () {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        video.srcObject = null;
+        log('REPLICA camera released by the test page after 30s -- this is our own cleanup,'
+          + ' not the widget losing the picture');
+      }, 30000);
     }, function (error) {
       log('REPLICA getUserMedia FAILED -- ' + (error && error.name ? error.name : 'unknown'));
     });
