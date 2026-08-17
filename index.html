@@ -186,7 +186,7 @@
   function nativeTampered(fn) {
     try {
       if (typeof fn !== 'function') return 'not-a-function';
-      return /\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn)) ? 'YES' : 'no';
+      return /\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn)) ? 'no' : 'YES';
     } catch (e) {
       return 'unknown';
     }
