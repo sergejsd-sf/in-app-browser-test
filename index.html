@@ -52,6 +52,15 @@
     color: #1a1d1f;
   }
   textarea { height: 220px; white-space: pre; }
+  .widget-video {
+    display: block;
+    width: 100%;
+    height: 180px;
+    margin: 10px 0 0;
+    border-radius: 8px;
+    background: #fff;
+    object-fit: cover;
+  }
   #log { font-size: 14px; }
   .note { font-size: 13px; color: #6b7280; margin: 6px 0 0; }
   summary { font-size: 13px; font-weight: 600; color: #6b7280; cursor: pointer; }
@@ -74,6 +83,13 @@
 <div class="card">
   <button id="btnCamera">J &middot; open the camera for real</button>
   <p class="note">This is the failure DEV-46128 is about. Presence of the API means nothing &mdash; only calling it does. Expect a permission prompt; allow it. The log records the exact error name if it fails.</p>
+</div>
+
+<h2>Replicate the document widget</h2>
+<div class="card">
+  <button id="btnWidget">K &middot; back camera + video.play()</button>
+  <video id="widgetVideo" class="widget-video" autoplay playsinline muted></video>
+  <p class="note">Same sequence as the real widget: getUserMedia with the app's own constraints (back camera, ideal 1920&times;1080), then srcObject, then play(). DEV-46128 reports a white screen with a working capture button in Facebook &mdash; that is play() failing after getUserMedia already succeeded. <b>Say whether you actually see a picture below.</b></p>
 </div>
 
 <h2>Leave the webview (Android)</h2>
@@ -495,6 +511,69 @@
     }, function (error) {
       settled = true;
       log('CAMERA FAILED -- ' + (error && error.name ? error.name : 'unknown')
+        + ': ' + (error && error.message ? error.message : ''));
+    });
+  });
+
+  onTap('btnWidget', 'K widget replica', function () {
+    var md = navigator.mediaDevices;
+    if (!md || typeof md.getUserMedia !== 'function') {
+      log('WIDGET getUserMedia absent -- nothing to replicate');
+      return;
+    }
+
+    var constraints = {
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+    };
+
+    log('WIDGET constraints: facingMode=environment, ideal 1920x1080 (the app defaults)');
+
+    md.getUserMedia(constraints).then(function (stream) {
+      var track = stream.getVideoTracks()[0];
+      var settings = track && typeof track.getSettings === 'function' ? track.getSettings() : {};
+      log('WIDGET getUserMedia OK -- label: ' + ((track && track.label) || '(none)')
+        + ', granted ' + settings.width + 'x' + settings.height
+        + ', facingMode=' + settings.facingMode);
+
+      var video = document.getElementById('widgetVideo');
+      video.setAttribute('playsinline', 'playsinline');
+      video.muted = true;
+      video.srcObject = stream;
+
+      var playResult = video.play();
+
+      if (!playResult || typeof playResult.then !== 'function') {
+        log('WIDGET video.play() returned no promise here -- rejection cannot be observed');
+      } else {
+        playResult.then(function () {
+          log('WIDGET video.play() RESOLVED');
+        }, function (error) {
+          log('WIDGET video.play() REJECTED -- ' + (error && error.name ? error.name : 'unknown')
+            + ': ' + (error && error.message ? error.message : '')
+            + '  <-- the app never catches this, so it shows a white screen');
+        });
+      }
+
+      setTimeout(function () {
+        log('WIDGET after 1500ms -- readyState=' + video.readyState
+          + ' videoWidth=' + video.videoWidth + ' videoHeight=' + video.videoHeight
+          + ' currentTime=' + video.currentTime.toFixed(2) + ' paused=' + video.paused);
+        log(video.videoWidth === 0 || video.currentTime === 0
+          ? 'WIDGET VERDICT: no frames decoded -- the white screen is reproduced here'
+          : 'WIDGET VERDICT: frames are flowing -- a picture should be visible above');
+      }, 1500);
+
+      setTimeout(function () {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        video.srcObject = null;
+        log('WIDGET camera released');
+      }, 12000);
+    }, function (error) {
+      log('WIDGET getUserMedia FAILED -- ' + (error && error.name ? error.name : 'unknown')
         + ': ' + (error && error.message ? error.message : ''));
     });
   });
