@@ -333,6 +333,20 @@
   logCameraPermission();
   logVideoInputs();
 
+  if (window.location.search.indexOf('autocam=1') !== -1) {
+    log('AUTOCAM: calling getUserMedia with no user gesture at all');
+    var autoStart = new Date().getTime();
+    navigator.mediaDevices.getUserMedia({ video: true }).then(function (stream) {
+      log('AUTOCAM OPENED after ' + (new Date().getTime() - autoStart) + 'ms'
+        + ' -- a gesture is NOT required here');
+      stream.getVideoTracks().forEach(function (track) { track.stop(); });
+    }, function (error) {
+      log('AUTOCAM FAILED after ' + (new Date().getTime() - autoStart) + 'ms -- '
+        + (error && error.name ? error.name : 'unknown')
+        + ' (fast + no blur = blocked by the webview; slow + blur = the user tapped deny)');
+    });
+  }
+
   document.getElementById('detect').innerHTML += ''
     + row('UA rule verdict', signals.verdict === 'WEBVIEW'
         ? '<span class="no">WEBVIEW</span> (no Version/, no browser token)'
