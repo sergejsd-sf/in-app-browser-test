@@ -87,9 +87,10 @@
 
 <h2>Replicate the document widget</h2>
 <div class="card">
-  <button id="btnWidget">K &middot; back camera + video.play()</button>
+  <button id="btnWidget">K &middot; document step (back camera)</button>
+  <button id="btnWidgetSelfie" class="ghost">L &middot; selfie step (front camera)</button>
   <video id="widgetVideo" class="widget-video" autoplay playsinline muted></video>
-  <p class="note">Same sequence as the real widget: getUserMedia with the app's own constraints (back camera, ideal 1920&times;1080), then srcObject, then play(). DEV-46128 reports a white screen with a working capture button in Facebook &mdash; that is play() failing after getUserMedia already succeeded. <b>Say whether you actually see a picture below.</b></p>
+  <p class="note">Same sequence as the real widget: getUserMedia with the app's own constraints (ideal 1920&times;1080), then srcObject, then play(). K uses the back camera like the document steps, L the front one like the selfie step. DEV-46128 reports a white screen with a working capture button in Facebook &mdash; that is play() failing after getUserMedia already succeeded. <b>Say whether you actually see a picture below.</b></p>
 </div>
 
 <h2>Leave the webview (Android)</h2>
@@ -515,7 +516,7 @@
     });
   });
 
-  onTap('btnWidget', 'K widget replica', function () {
+  function runWidgetReplica(facingMode, step) {
     var md = navigator.mediaDevices;
     if (!md || typeof md.getUserMedia !== 'function') {
       log('WIDGET getUserMedia absent -- nothing to replicate');
@@ -524,13 +525,14 @@
 
     var constraints = {
       video: {
-        facingMode: 'environment',
+        facingMode: facingMode,
         width: { ideal: 1920 },
         height: { ideal: 1080 },
       },
     };
 
-    log('WIDGET constraints: facingMode=environment, ideal 1920x1080 (the app defaults)');
+    log('WIDGET [' + step + '] constraints: facingMode=' + facingMode
+      + ', ideal 1920x1080 (the app defaults for this step)');
 
     md.getUserMedia(constraints).then(function (stream) {
       var track = stream.getVideoTracks()[0];
@@ -576,6 +578,14 @@
       log('WIDGET getUserMedia FAILED -- ' + (error && error.name ? error.name : 'unknown')
         + ': ' + (error && error.message ? error.message : ''));
     });
+  }
+
+  onTap('btnWidget', 'K widget replica (document)', function () {
+    runWidgetReplica('environment', 'document');
+  });
+
+  onTap('btnWidgetSelfie', 'L widget replica (selfie)', function () {
+    runWidgetReplica('user', 'selfie');
   });
 
   onTap('btnCopy', 'F copy production logic', function () {
