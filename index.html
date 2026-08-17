@@ -70,6 +70,12 @@
   <div id="raw"></div>
 </details>
 
+<h2>Camera &mdash; the thing that actually breaks</h2>
+<div class="card">
+  <button id="btnCamera">J &middot; open the camera for real</button>
+  <p class="note">This is the failure DEV-46128 is about. Presence of the API means nothing &mdash; only calling it does. Expect a permission prompt; allow it. The log records the exact error name if it fails.</p>
+</div>
+
 <h2>Leave the webview (Android)</h2>
 <div class="card">
   <button id="btnBrowsable">A · intent:// BROWSABLE <span class="tag">shipped</span></button>
@@ -183,47 +189,73 @@
     try { return window.top === window; } catch (e) { return false; }
   }
 
-  function nativeTampered(fn) {
-    try {
-      if (typeof fn !== 'function') return 'not-a-function';
-      return /\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn)) ? 'no' : 'YES';
-    } catch (e) {
-      return 'unknown';
-    }
+  var IOS_BROWSER_TOKEN = /\b(CriOS|FxiOS|EdgiOS|OPiOS|OPT|YaBrowser|Ddg|DuckDuckGo|Brave|Coast)\//i;
+
+  function uaSignals() {
+    var hasVersion = /\bVersion\//i.test(ua);
+    var token = ua.match(IOS_BROWSER_TOKEN);
+    var onIOS = /iPhone|iPad|iPod/i.test(ua);
+    return {
+      onIOS: onIOS,
+      hasVersion: hasVersion,
+      hasSafari: /Safari\//i.test(ua),
+      browserToken: token ? token[1] : 'none',
+      verdict: onIOS && !hasVersion && !token ? 'WEBVIEW' : 'real browser (or cannot tell)',
+    };
   }
 
-  function webkitHandlerNames() {
+  function cameraApiPresence() {
+    var md = navigator.mediaDevices;
+    return {
+      mediaDevices: !!md,
+      getUserMedia: !!(md && typeof md.getUserMedia === 'function'),
+      enumerateDevices: !!(md && typeof md.enumerateDevices === 'function'),
+      legacyGetUserMedia: typeof navigator.getUserMedia === 'function',
+    };
+  }
+
+  function logVideoInputs() {
+    var md = navigator.mediaDevices;
+    if (!md || typeof md.enumerateDevices !== 'function') {
+      log('CAMERA enumerateDevices unavailable -- cannot count inputs without a prompt');
+      return;
+    }
+
+    md.enumerateDevices().then(function (devices) {
+      var video = devices.filter(function (d) { return d.kind === 'videoinput'; });
+      var labelled = video.filter(function (d) { return !!d.label; }).length;
+      log('CAMERA enumerateDevices -> ' + devices.length + ' devices, '
+        + video.length + ' videoinput(s), ' + labelled + ' with a label'
+        + ' (0 videoinput = camera invisible without any prompt)');
+    }, function (error) {
+      log('CAMERA enumerateDevices rejected: ' + (error && error.name ? error.name : error));
+    });
+  }
+
+  function logCameraPermission() {
+    if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
+      log('CAMERA permissions.query unavailable here');
+      return;
+    }
     try {
-      if (window.webkit && window.webkit.messageHandlers) {
-        var names = Object.keys(window.webkit.messageHandlers);
-        return names.length ? names.join(',') : '(present, empty)';
-      }
-    } catch (e) { /* ignore */ }
-    return null;
+      navigator.permissions.query({ name: 'camera' }).then(function (status) {
+        log('CAMERA permissions.query -> ' + status.state);
+      }, function (error) {
+        log('CAMERA permissions.query rejected: ' + (error && error.name ? error.name : error));
+      });
+    } catch (error) {
+      log('CAMERA permissions.query threw: ' + (error && error.name ? error.name : error));
+    }
   }
 
   function collectExtraDiagnostics() {
     var vv = window.visualViewport;
     return {
-      standalone: typeof navigator.standalone === 'undefined' ? 'undefined' : navigator.standalone,
       innerH: window.innerHeight,
       outerH: window.outerHeight,
       screenH: screen.height,
       vvHeight: vv ? vv.height : 'n/a',
-      dpr: window.devicePixelRatio,
-      hasShare: typeof navigator.share === 'function',
-      hasCanShare: typeof navigator.canShare === 'function',
-      hasChrome: typeof window.chrome !== 'undefined',
-      hasWebkit: typeof window.webkit !== 'undefined',
-      webkitHandlers: webkitHandlerNames(),
       referrer: document.referrer || '(empty)',
-      addEventListenerTampered: nativeTampered(document.addEventListener),
-      eventTargetAddEventListenerTampered:
-        (window.EventTarget && EventTarget.prototype)
-          ? nativeTampered(EventTarget.prototype.addEventListener)
-          : 'no EventTarget.prototype',
-      fetchTampered: typeof window.fetch === 'function' ? nativeTampered(window.fetch) : 'no fetch',
-      xhrOpenTampered: nativeTampered(XMLHttpRequest.prototype.open),
     };
   }
 
@@ -280,30 +312,35 @@
   document.getElementById('url').value = baseUrl();
 
   var extra = collectExtraDiagnostics();
+  var signals = uaSignals();
+  var cameraApi = cameraApiPresence();
 
   log('page loaded');
-  log('in-app browser: ' + (detected || 'none') + ', platform: ' + plat);
+  log('in-app browser (name patterns): ' + (detected || 'none') + ', platform: ' + plat);
   log('ua: ' + ua);
-  log('asyncClipboard=' + hasAsyncClipboard() + ' execCommand=' + hasLegacyClipboard()
-    + ' secureContext=' + window.isSecureContext + ' topLevel=' + isTopLevel());
-  log('standalone=' + extra.standalone + ' innerH=' + extra.innerH + ' outerH=' + extra.outerH
-    + ' screenH=' + extra.screenH + ' vvHeight=' + extra.vvHeight + ' dpr=' + extra.dpr);
-  log('hasShare=' + extra.hasShare + ' hasCanShare=' + extra.hasCanShare + ' hasChrome=' + extra.hasChrome);
-  log('hasWebkit=' + extra.hasWebkit + ' webkitHandlers=' + extra.webkitHandlers);
+  log('UA RULE -- hasVersion=' + signals.hasVersion + ' hasSafari=' + signals.hasSafari
+    + ' browserToken=' + signals.browserToken + ' => ' + signals.verdict);
+  log('viewport -- innerH=' + extra.innerH + ' outerH=' + extra.outerH
+    + ' screenH=' + extra.screenH + ' vvHeight=' + extra.vvHeight);
   log('referrer=' + extra.referrer);
-  log('tamper check -- addEventListener=' + extra.addEventListenerTampered
-    + ' EventTarget.prototype.addEventListener=' + extra.eventTargetAddEventListenerTampered
-    + ' fetch=' + extra.fetchTampered + ' XHR.open=' + extra.xhrOpenTampered);
+  log('CAMERA api -- mediaDevices=' + cameraApi.mediaDevices
+    + ' getUserMedia=' + cameraApi.getUserMedia
+    + ' enumerateDevices=' + cameraApi.enumerateDevices
+    + ' legacyGetUserMedia=' + cameraApi.legacyGetUserMedia);
+  log('clipboard -- async=' + hasAsyncClipboard() + ' execCommand=' + hasLegacyClipboard()
+    + ' secureContext=' + window.isSecureContext + ' topLevel=' + isTopLevel());
+
+  logCameraPermission();
+  logVideoInputs();
 
   document.getElementById('detect').innerHTML += ''
-    + row('visualViewport / screen height', extra.vvHeight + ' / ' + extra.screenH)
-    + row('navigator.standalone', String(extra.standalone))
-    + row('window.webkit present', yesNo(extra.hasWebkit) + (extra.webkitHandlers ? ' &mdash; handlers: ' + extra.webkitHandlers : ''))
+    + row('UA rule verdict', signals.verdict === 'WEBVIEW'
+        ? '<span class="no">WEBVIEW</span> (no Version/, no browser token)'
+        : '<span class="ok">real browser (or cannot tell)</span>')
+    + row('outerHeight / screen height', extra.outerH + ' / ' + extra.screenH)
     + row('document.referrer', extra.referrer)
-    + row('DOM API tampered (addEventListener/fetch/XHR)', [
-        extra.addEventListenerTampered, extra.eventTargetAddEventListenerTampered,
-        extra.fetchTampered, extra.xhrOpenTampered
-      ].some(function (v) { return v === 'YES'; }) ? '<span class="no">YES</span>' : '<span class="ok">no</span>');
+    + row('camera API present', yesNo(cameraApi.getUserMedia)
+        + ' &mdash; presence only, tap J to actually open it');
 
   function copyViaExecCommand(text) {
     if (!hasLegacyClipboard() || !document.body) return false;
@@ -421,6 +458,32 @@
     log('navigating to ' + url);
     window.location.href = url;
   }, true);
+
+  onTap('btnCamera', 'J open camera', function () {
+    var md = navigator.mediaDevices;
+    if (!md || typeof md.getUserMedia !== 'function') {
+      log('CAMERA getUserMedia is not even present -- the widget cannot work here at all');
+      return;
+    }
+
+    var settled = false;
+    setTimeout(function () {
+      if (!settled) log('CAMERA getUserMedia never answered after 10s (prompt pending or swallowed)');
+    }, 10000);
+
+    md.getUserMedia({ video: true }).then(function (stream) {
+      settled = true;
+      var tracks = stream.getVideoTracks();
+      log('CAMERA OPENED -- ' + tracks.length + ' video track(s), label: '
+        + (tracks.length && tracks[0].label ? tracks[0].label : '(no label)'));
+      tracks.forEach(function (track) { track.stop(); });
+      log('CAMERA stream stopped');
+    }, function (error) {
+      settled = true;
+      log('CAMERA FAILED -- ' + (error && error.name ? error.name : 'unknown')
+        + ': ' + (error && error.message ? error.message : ''));
+    });
+  });
 
   onTap('btnCopy', 'F copy production logic', function () {
     var text = baseUrl();
