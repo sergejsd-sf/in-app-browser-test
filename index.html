@@ -52,6 +52,56 @@
     color: #1a1d1f;
   }
   textarea { height: 220px; white-space: pre; }
+  .replica-stage { height: 60vh; border: 1px dashed #d1d5db; border-radius: 8px; }
+  .replica .capture-area-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-around;
+    background-color: white;
+    width: 100%;
+    height: 100%;
+    padding: 16px;
+  }
+  .replica .capture-area-message { display: none; }
+  .replica .video-wrapper { position: relative; border-radius: 8px; overflow: hidden; }
+  .replica .video-wrapper > * { width: 100%; height: 100%; object-fit: cover; }
+  .replica .video-wrapper--rectangle { aspect-ratio: 1.6 / 1; border-radius: 8px; }
+  .replica .video-wrapper--circle { aspect-ratio: 1 / 1; border-radius: 50%; }
+  .replica .record-button {
+    display: block;
+    margin: 32px;
+    width: 100px;
+    height: 100px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: radial-gradient(circle, red 55%, transparent 55%, transparent 65%, red 65%);
+  }
+  @media screen and (orientation: landscape) and (max-width: 667px) {
+    .replica .video-wrapper { max-width: 400px; }
+  }
+  @media screen and (orientation: landscape) and (pointer: coarse) {
+    .replica .capture-area-container { padding: 0px; pointer-events: none; }
+    .replica .capture-area-video { opacity: 0.2; }
+    .replica .capture-area-message {
+      position: fixed;
+      top: 50%;
+      display: block;
+      font-size: 3vw;
+      font-weight: bold;
+      text-align: center;
+      z-index: 3;
+    }
+    .replica .capture-area-message__impossible { display: none; }
+    .replica .record-button {
+      margin: 16px;
+      width: 64px;
+      height: 64px;
+      pointer-events: none;
+      opacity: 0.5;
+    }
+  }
   .widget-video {
     display: block;
     width: 100%;
@@ -90,7 +140,25 @@
   <button id="btnWidget">K &middot; document step (back camera)</button>
   <button id="btnWidgetSelfie" class="ghost">L &middot; selfie step (front camera)</button>
   <video id="widgetVideo" class="widget-video" autoplay playsinline muted></video>
-  <p class="note">Same sequence as the real widget: getUserMedia with the app's own constraints (ideal 1920&times;1080), then srcObject, then play(). K uses the back camera like the document steps, L the front one like the selfie step. DEV-46128 reports a white screen with a working capture button in Facebook &mdash; that is play() failing after getUserMedia already succeeded. <b>Say whether you actually see a picture below.</b></p>
+  <p class="note">Same sequence as the real widget: getUserMedia with the app's own constraints (ideal 1920&times;1080), then srcObject, then play(). K uses the back camera like the document steps, L the front one like the selfie step. The video here has an explicit height, which the real widget does not &mdash; that is what M below removes.</p>
+</div>
+
+<h2>The widget, copied 1:1</h2>
+<div class="card">
+  <button id="btnReplica">M &middot; exact markup and css, no height of its own</button>
+  <div class="replica-stage replica">
+    <div class="capture-area-container">
+      <div class="capture-area-message__impossible">Take a photo of your document</div>
+      <div id="replicaWrapper" class="video-wrapper video-wrapper--rectangle">
+        <video id="replicaVideo" class="capture-area-video" autoplay playsinline muted></video>
+      </div>
+      <div class="video-button-container">
+        <button class="record-button"></button>
+      </div>
+      <div class="capture-area-message">Please rotate your phone</div>
+    </div>
+  </div>
+  <p class="note">The real widget sizes the video only through <code>aspect-ratio</code> on its wrapper (shape-overlay.vue) and gives the video itself no dimensions at all. If <code>aspect-ratio</code> does not apply here, the wrapper collapses to zero height and all that is left is the white container and the red button &mdash; the exact DEV-46128 symptom. <b>Say whether you see a picture inside the dashed box.</b></p>
 </div>
 
 <h2>Leave the webview (Android)</h2>
@@ -586,6 +654,64 @@
 
   onTap('btnWidgetSelfie', 'L widget replica (selfie)', function () {
     runWidgetReplica('user', 'selfie');
+  });
+
+  onTap('btnReplica', 'M widget copied 1:1', function () {
+    var wrapper = document.getElementById('replicaWrapper');
+    var video = document.getElementById('replicaVideo');
+
+    log('REPLICA CSS.supports(aspect-ratio) = '
+      + (window.CSS && typeof CSS.supports === 'function'
+        ? CSS.supports('aspect-ratio', '1.6 / 1')
+        : 'CSS.supports unavailable'));
+    log('REPLICA computed aspect-ratio = '
+      + (getComputedStyle(wrapper).aspectRatio || '(property not parsed)'));
+    log('REPLICA media -- orientation:landscape=' + matchMedia('(orientation: landscape)').matches
+      + ' pointer:coarse=' + matchMedia('(pointer: coarse)').matches
+      + ' (both true = the video is dimmed to 0.2 and the button is dead by design)');
+
+    var md = navigator.mediaDevices;
+    if (!md || typeof md.getUserMedia !== 'function') {
+      log('REPLICA getUserMedia absent');
+      return;
+    }
+
+    md.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+    }).then(function (stream) {
+      video.setAttribute('playsinline', 'playsinline');
+      video.muted = true;
+      video.srcObject = stream;
+      video.play();
+
+      setTimeout(function () {
+        var wrapperBox = wrapper.getBoundingClientRect();
+        var videoBox = video.getBoundingClientRect();
+        var styles = getComputedStyle(video);
+
+        log('REPLICA wrapper box = ' + Math.round(wrapperBox.width) + 'x'
+          + Math.round(wrapperBox.height)
+          + ', video box = ' + Math.round(videoBox.width) + 'x' + Math.round(videoBox.height));
+        log('REPLICA video opacity=' + styles.opacity
+          + ' pointerEvents=' + styles.pointerEvents
+          + ' decoded=' + video.videoWidth + 'x' + video.videoHeight);
+
+        if (Math.round(wrapperBox.height) === 0) {
+          log('REPLICA VERDICT: wrapper collapsed to zero height -- DEV-46128 reproduced,'
+            + ' and the cause is aspect-ratio, not the camera');
+        } else if (parseFloat(styles.opacity) < 1) {
+          log('REPLICA VERDICT: video is dimmed by the landscape media query -- looks white,'
+            + ' and the capture button is not tappable');
+        } else {
+          log('REPLICA VERDICT: laid out fine here -- ' + Math.round(videoBox.height)
+            + 'px tall, so this device does not reproduce the bug');
+        }
+
+        stream.getTracks().forEach(function (t) { t.stop(); });
+      }, 1500);
+    }, function (error) {
+      log('REPLICA getUserMedia FAILED -- ' + (error && error.name ? error.name : 'unknown'));
+    });
   });
 
   onTap('btnCopy', 'F copy production logic', function () {
