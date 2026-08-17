@@ -183,6 +183,50 @@
     try { return window.top === window; } catch (e) { return false; }
   }
 
+  function nativeTampered(fn) {
+    try {
+      if (typeof fn !== 'function') return 'not-a-function';
+      return /\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn)) ? 'YES' : 'no';
+    } catch (e) {
+      return 'unknown';
+    }
+  }
+
+  function webkitHandlerNames() {
+    try {
+      if (window.webkit && window.webkit.messageHandlers) {
+        var names = Object.keys(window.webkit.messageHandlers);
+        return names.length ? names.join(',') : '(present, empty)';
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  function collectExtraDiagnostics() {
+    var vv = window.visualViewport;
+    return {
+      standalone: typeof navigator.standalone === 'undefined' ? 'undefined' : navigator.standalone,
+      innerH: window.innerHeight,
+      outerH: window.outerHeight,
+      screenH: screen.height,
+      vvHeight: vv ? vv.height : 'n/a',
+      dpr: window.devicePixelRatio,
+      hasShare: typeof navigator.share === 'function',
+      hasCanShare: typeof navigator.canShare === 'function',
+      hasChrome: typeof window.chrome !== 'undefined',
+      hasWebkit: typeof window.webkit !== 'undefined',
+      webkitHandlers: webkitHandlerNames(),
+      referrer: document.referrer || '(empty)',
+      addEventListenerTampered: nativeTampered(document.addEventListener),
+      eventTargetAddEventListenerTampered:
+        (window.EventTarget && EventTarget.prototype)
+          ? nativeTampered(EventTarget.prototype.addEventListener)
+          : 'no EventTarget.prototype',
+      fetchTampered: typeof window.fetch === 'function' ? nativeTampered(window.fetch) : 'no fetch',
+      xhrOpenTampered: nativeTampered(XMLHttpRequest.prototype.open),
+    };
+  }
+
   function yesNo(value) {
     return '<span class="' + (value ? 'ok' : 'no') + '">' + (value ? 'yes' : 'no') + '</span>';
   }
@@ -235,11 +279,31 @@
 
   document.getElementById('url').value = baseUrl();
 
+  var extra = collectExtraDiagnostics();
+
   log('page loaded');
   log('in-app browser: ' + (detected || 'none') + ', platform: ' + plat);
   log('ua: ' + ua);
   log('asyncClipboard=' + hasAsyncClipboard() + ' execCommand=' + hasLegacyClipboard()
     + ' secureContext=' + window.isSecureContext + ' topLevel=' + isTopLevel());
+  log('standalone=' + extra.standalone + ' innerH=' + extra.innerH + ' outerH=' + extra.outerH
+    + ' screenH=' + extra.screenH + ' vvHeight=' + extra.vvHeight + ' dpr=' + extra.dpr);
+  log('hasShare=' + extra.hasShare + ' hasCanShare=' + extra.hasCanShare + ' hasChrome=' + extra.hasChrome);
+  log('hasWebkit=' + extra.hasWebkit + ' webkitHandlers=' + extra.webkitHandlers);
+  log('referrer=' + extra.referrer);
+  log('tamper check -- addEventListener=' + extra.addEventListenerTampered
+    + ' EventTarget.prototype.addEventListener=' + extra.eventTargetAddEventListenerTampered
+    + ' fetch=' + extra.fetchTampered + ' XHR.open=' + extra.xhrOpenTampered);
+
+  document.getElementById('detect').innerHTML += ''
+    + row('visualViewport / screen height', extra.vvHeight + ' / ' + extra.screenH)
+    + row('navigator.standalone', String(extra.standalone))
+    + row('window.webkit present', yesNo(extra.hasWebkit) + (extra.webkitHandlers ? ' &mdash; handlers: ' + extra.webkitHandlers : ''))
+    + row('document.referrer', extra.referrer)
+    + row('DOM API tampered (addEventListener/fetch/XHR)', [
+        extra.addEventListenerTampered, extra.eventTargetAddEventListenerTampered,
+        extra.fetchTampered, extra.xhrOpenTampered
+      ].some(function (v) { return v === 'YES'; }) ? '<span class="no">YES</span>' : '<span class="ok">no</span>');
 
   function copyViaExecCommand(text) {
     if (!hasLegacyClipboard() || !document.body) return false;
