@@ -107,7 +107,7 @@
 (function () {
   'use strict';
 
-  var BUILD = 2;
+  var BUILD = 3;
   var CAMERA_TIMEOUT_MS = 8000;
   var LEAVE_WATCHDOG_MS = 1500;
 
@@ -269,47 +269,60 @@
     return window.location.href;
   }
 
-  function escapeTarget() {
+  function escapeAttempts() {
+    var loc = window.location;
+
     if (isAndroid) {
-      var loc = window.location;
-      return {
-        label: 'Open in browser',
-        url: 'intent://' + loc.host + (loc.pathname || '/') + (loc.search || '') + INTENT_SUFFIX,
-        kind: 'intent'
-      };
+      return [
+        { kind: 'intent', url: 'intent://' + loc.host + (loc.pathname || '/') + (loc.search || '') + INTENT_SUFFIX },
+        { kind: 'googlechrome', url: pageUrl().replace(/^https?/, 'googlechrome') }
+      ];
     }
-    if (isIOS && inAppBrowser === IN_APP_BROWSERS.FACEBOOK) {
-      return { label: 'Open in Safari', url: 'x-safari-' + pageUrl(), kind: 'x-safari-https' };
+
+    if (isIOS) {
+      return [
+        { kind: 'x-safari-https', url: 'x-safari-' + pageUrl() },
+        { kind: 'googlechromes', url: pageUrl().replace(/^https/, 'googlechromes') }
+      ];
     }
-    if (isIOS && inAppBrowser === IN_APP_BROWSERS.INSTAGRAM) {
-      return {
-        label: 'Open in Chrome',
-        url: pageUrl().replace(/^https/, 'googlechromes'),
-        kind: 'googlechromes'
-      };
-    }
-    return null;
+
+    return [];
   }
 
-  function watchForLeaving(kind) {
-    var left = false;
+  var leftTheApp = false;
 
-    function onGone() {
-      if (left) return;
-      left = true;
-      log('ESCAPE (' + kind + ') -- page went hidden, the hop worked');
+  function onPageGone() {
+    if (leftTheApp) return;
+    leftTheApp = true;
+    log('ESCAPE -- page went hidden, the hop worked');
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) onPageGone();
+  });
+  window.addEventListener('pagehide', onPageGone);
+
+  function runEscapeChain(attempts, index) {
+    if (leftTheApp) return;
+
+    if (index >= attempts.length) {
+      log('ESCAPE -- every scheme fell through, the link is the only way out of this app');
+      btnEscape.textContent = 'That did not work';
+      btnEscape.disabled = true;
+      linkHint.textContent = 'Copy the link below and paste it into your browser.';
+      return;
     }
 
-    document.addEventListener('visibilitychange', function () {
-      if (document.hidden) onGone();
-    });
-    window.addEventListener('pagehide', onGone);
+    var attempt = attempts[index];
+    log('ESCAPE trying ' + attempt.kind + ' -> ' + attempt.url);
 
     setTimeout(function () {
-      if (left) return;
-      log('ESCAPE (' + kind + ') -- still here after ' + LEAVE_WATCHDOG_MS
-        + 'ms, the hop did NOT work; the link is the only way out');
+      if (leftTheApp) return;
+      log('ESCAPE ' + attempt.kind + ' -- still here after ' + LEAVE_WATCHDOG_MS + 'ms');
+      runEscapeChain(attempts, index + 1);
     }, LEAVE_WATCHDOG_MS);
+
+    window.location.href = attempt.url;
   }
 
   function attachVideo(opened, note) {
@@ -359,14 +372,15 @@
         + ' so let us check the camera works here first.'
     );
 
-    var target = escapeTarget();
-    if (target) {
-      btnEscape.textContent = target.label;
+    var attempts = escapeAttempts();
+    if (attempts.length) {
+      btnEscape.textContent = 'Open in browser';
+      btnEscape.disabled = false;
       show(btnEscape);
-      log('ESCAPE button available: ' + target.kind);
+      log('ESCAPE chain ready: ' + attempts.map(function (a) { return a.kind; }).join(' -> '));
     } else {
       hide(btnEscape);
-      log('ESCAPE button not offered here -- no scheme works in this app, link only');
+      log('ESCAPE button not offered -- neither iOS nor Android, link only');
     }
   }
 
@@ -417,11 +431,12 @@
   }
 
   function onEscapeTap() {
-    var target = escapeTarget();
-    if (!target) return;
-    log('ESCAPE tap -- ' + target.kind + ' -> ' + target.url);
-    watchForLeaving(target.kind);
-    window.location.href = target.url;
+    var attempts = escapeAttempts();
+    if (!attempts.length) return;
+    leftTheApp = false;
+    btnEscape.textContent = 'Opening…';
+    log('ESCAPE tap -- chain of ' + attempts.length + ', ' + LEAVE_WATCHDOG_MS + 'ms apart');
+    runEscapeChain(attempts, 0);
   }
 
   function copyViaExecCommand(text) {
@@ -506,7 +521,9 @@
     + row('unbranded iOS webview', yesNo(unbrandedIOSWebView))
     + row('gate applies', yesNo(suspectWebView))
     + row('platform', isIOS ? 'iOS' : (isAndroid ? 'Android' : 'other'))
-    + row('escape scheme', escapeTarget() ? escapeTarget().kind : '<span class="no">none works here</span>');
+    + row('escape chain', escapeAttempts().length
+      ? escapeAttempts().map(function (a) { return a.kind; }).join(' &rarr; ')
+      : '<span class="no">nothing to try</span>');
 
   log('page loaded -- FLOW BUILD ' + BUILD);
   if (spoofedUa) log('!! user agent overridden by ?ua= -- detection below is a simulation');

@@ -15,7 +15,7 @@ flowchart TD
     PERM -->|granted| FORM
     PERM -->|prompt / denied / unsupported| GATE
 
-    GATE[/"Gate screen — form is blocked<br/>• Check camera access<br/>• Open in browser (only where a scheme works)<br/>• Copy link + paste it in your browser"/]
+    GATE[/"Gate screen — form is blocked<br/>• Check camera access<br/>• Open in browser<br/>• Copy link + paste it in your browser"/]
 
     GATE -->|taps Check| GUM{"getUserMedia({video:true})<br/>8s watchdog"}
     GATE -->|taps Open in browser| HOP
@@ -30,9 +30,11 @@ flowchart TD
     DEAD -->|taps Open in browser| HOP
     DEAD -->|copies the link| OUT
 
-    HOP{Page went hidden<br/>within 1.5s?}
+    HOP{"Fire next scheme<br/>iOS: x-safari-https → googlechromes<br/>Android: intent:// → googlechrome://<br/>page hidden within 1.5s?"}
     HOP -->|yes| OUT
-    HOP -->|no| GATE
+    HOP -->|another scheme left| HOP
+    HOP -->|chain exhausted| LINKONLY[/"That did not work —<br/>the link is the only way out"/]
+    LINKONLY --> OUT
 
     FORM([Registration form<br/>camera permission already settled])
     OUT([Client continues in the real browser])
@@ -57,10 +59,18 @@ prompt earlier and uses the answer to route.
 | App | iOS camera | iOS escape | Android camera | Android escape |
 |---|---|---|---|---|
 | Facebook | works | `x-safari-https` | works | `intent://` |
-| Messenger | works | none | **hangs forever** | `intent://` |
+| Messenger | works | none measured | **hangs forever** | `intent://` |
 | Instagram | works | `googlechromes` | works | `intent://` |
-| TikTok | **blocked** | none | **blocked** | `intent://` |
-| WeChat | works | none | works | **none** |
+| TikTok | **blocked** | none measured | **blocked** | `intent://` |
+| WeChat | works | none measured | works | **none measured** |
+
+The escape button does not consult this table. Firing an unhandled URL scheme inside an
+iOS webview was measured to do nothing at all — no error, no alert — so the button fires
+every scheme its platform has, in order, 1.5s apart, and stops as soon as the page goes
+hidden. That matters because **the user agent cannot tell Messenger from Facebook**: iOS
+Messenger sends Facebook's own `FBAN/FBIOS` tokens, so any per-app rule would fire
+Facebook's Safari scheme in Messenger regardless. (`IABMV/1` does separate the two on both
+platforms, but it is undocumented and the chain makes it unnecessary.)
 
 WhatsApp and Viber open links in the default browser and never reach a webview.
 
