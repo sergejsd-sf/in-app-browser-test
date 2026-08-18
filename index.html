@@ -96,8 +96,7 @@
 <h2>Leave the webview (Android)</h2>
 <div class="card">
   <button id="btnBrowsable">A · intent:// BROWSABLE <span class="tag">shipped</span></button>
-  <button id="btnChrome" class="ghost">B · intent:// package=com.android.chrome</button>
-  <p class="note">A is what the app is about to ship. B is only for comparison &mdash; if A fails and B works, the recipe needs changing.</p>
+  <p class="note">This is what the app ships. Android hands the link to the <b>default</b> browser; the &ldquo;Open with&rdquo; chooser only appears when no default is set, and a page cannot force it. Forcing a vendor (<code>package=com.android.chrome</code>) was tried too and behaved identically on a phone whose default is Chrome, so it was dropped &mdash; it would only ignore the client&rsquo;s own choice.</p>
 </div>
 
 <h2>Leave the webview (iOS experiments)</h2>
@@ -111,11 +110,9 @@
 <div class="card">
   <input id="url" readonly>
   <p class="note" id="copyState">&nbsp;</p>
-  <button id="btnCopy">F · copy (production logic)</button>
-  <button id="btnCopyLegacy" class="ghost">G · copy via execCommand only</button>
-  <button id="btnCopyAsync" class="ghost">H · copy via navigator.clipboard only</button>
+  <button id="btnCopy">F · copy the link</button>
   <button id="btnVerify" class="quiet">I · read the clipboard back and check it</button>
-  <p class="note">“COPIED” above only means the API did not complain. This reads the clipboard and compares it — the only real proof. iOS may ask for permission to paste; allow it.</p>
+  <p class="note">One button, the chain the app itself will use: <code>navigator.clipboard.writeText</code> first, and an <code>execCommand</code> fallback if it is missing, rejects, or never answers &mdash; every step is logged. “COPIED” only means the API did not complain; I reads the clipboard back, which is the only real proof, but in-app browsers often deny it (Facebook always does). iOS may ask for permission to paste; allow it.</p>
 </div>
 
 <h2>Log</h2>
@@ -140,7 +137,8 @@
   ];
 
   var WATCHDOG_MS = 8000;
-  var BUILD = 11;
+  var COPY_SETTLE_MS = 1500;
+  var BUILD = 13;
 
   var ua = navigator.userAgent || '';
   var lines = [];
@@ -305,12 +303,6 @@
       + window.location.pathname + window.location.search;
   }
 
-  function intentChrome() {
-    return 'intent://' + window.location.host + window.location.pathname + window.location.search
-      + '#Intent;scheme=https;package=com.android.chrome;'
-      + 'S.browser_fallback_url=' + encodeURIComponent(baseUrl()) + ';end';
-  }
-
   var detected = detectInAppBrowser();
   var plat = platform();
 
@@ -323,8 +315,7 @@
   document.getElementById('raw').innerHTML = ''
     + row('location.href', baseUrl())
     + row('user agent', ua)
-    + row('intent A (BROWSABLE)', intentBrowsable())
-    + row('intent B (chrome)', intentChrome());
+    + row('intent (BROWSABLE)', intentBrowsable());
 
   document.getElementById('url').value = baseUrl();
 
@@ -332,7 +323,7 @@
   var signals = uaSignals();
   var cameraApi = cameraApiPresence();
 
-  log('page loaded -- BUILD ' + BUILD + ' (buttons A, B, D-L)');
+  log('page loaded -- BUILD ' + BUILD + ' (buttons A, D, E, F, I, J, K, L)');
   log('in-app browser (name patterns): ' + (detected || 'none') + ', platform: ' + plat);
   log('ua: ' + ua);
   log('UA RULE -- hasVersion=' + signals.hasVersion + ' hasSafari=' + signals.hasSafari
@@ -463,12 +454,6 @@
 
   onTap('btnBrowsable', 'A intent BROWSABLE', function () {
     var url = intentBrowsable();
-    log('navigating to ' + url);
-    window.location.href = url;
-  }, true);
-
-  onTap('btnChrome', 'B intent chrome', function () {
-    var url = intentChrome();
     log('navigating to ' + url);
     window.location.href = url;
   }, true);
@@ -674,45 +659,55 @@
     runWidgetReplica('user', 'selfie');
   });
 
-  onTap('btnCopy', 'F copy production logic', function () {
-    var text = baseUrl();
-    if (hasAsyncClipboard()) {
-      log('using navigator.clipboard.writeText');
-      navigator.clipboard.writeText(text).then(function () {
-        reportCopy('async clipboard', true, text);
-      }, function (error) {
-        log('async clipboard rejected: ' + error);
-        reportCopy('async clipboard', false, text);
-      });
-      return;
-    }
-    log('no async clipboard, using execCommand');
-    reportCopy('execCommand', copyViaExecCommand(text), text);
-  });
-
-  onTap('btnCopyLegacy', 'G copy execCommand only', function () {
-    var text = baseUrl();
+  function copyLinkFallback(text, why) {
     if (!hasLegacyClipboard()) {
-      log('document.execCommand is not a function');
-      reportCopy('execCommand', false, text);
+      log('COPY step 2 impossible -- document.execCommand is not a function (' + why + ')');
+      reportCopy('no clipboard api left', false, text);
       return;
     }
-    reportCopy('execCommand (forced)', copyViaExecCommand(text), text);
-  });
+    log('COPY step 2 -- execCommand fallback (' + why + ')');
+    reportCopy('execCommand fallback', copyViaExecCommand(text), text);
+  }
 
-  onTap('btnCopyAsync', 'H copy async only', function () {
-    var text = baseUrl();
+  function copyLink(text) {
     if (!hasAsyncClipboard()) {
-      log('navigator.clipboard.writeText is unavailable');
-      reportCopy('async clipboard', false, text);
+      log('COPY step 1 skipped -- navigator.clipboard.writeText is unavailable here');
+      copyLinkFallback(text, 'no async clipboard at all');
       return;
     }
+
+    var settled = false;
+
+    log('COPY step 1 -- navigator.clipboard.writeText');
+
+    setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      log('COPY step 1 never answered within ' + COPY_SETTLE_MS + 'ms');
+      copyLinkFallback(text, 'the async clipboard hung -- the user gesture may be stale by now');
+    }, COPY_SETTLE_MS);
+
     navigator.clipboard.writeText(text).then(function () {
-      reportCopy('async clipboard (forced)', true, text);
+      if (settled) {
+        log('COPY step 1 resolved late, after the fallback had already run');
+        return;
+      }
+      settled = true;
+      reportCopy('async clipboard', true, text);
     }, function (error) {
-      log('async clipboard rejected: ' + error);
-      reportCopy('async clipboard (forced)', false, text);
+      var name = error && error.name ? error.name : 'unknown';
+      if (settled) {
+        log('COPY step 1 rejected late, after the fallback had already run -- ' + name);
+        return;
+      }
+      settled = true;
+      log('COPY step 1 rejected -- ' + name + ': ' + (error && error.message ? error.message : ''));
+      copyLinkFallback(text, 'the async clipboard rejected');
     });
+  }
+
+  onTap('btnCopy', 'F copy the link', function () {
+    copyLink(baseUrl());
   });
 
   onTap('btnVerify', 'I verify clipboard', function () {
