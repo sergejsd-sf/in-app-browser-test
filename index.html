@@ -139,7 +139,7 @@
   var WATCHDOG_MS = 8000;
   var COPY_SETTLE_MS = 1500;
   var WIDGET_SETTLE_MS = 10000;
-  var BUILD = 17;
+  var BUILD = 18;
 
   var ua = navigator.userAgent || '';
   var lines = [];
@@ -427,9 +427,9 @@
       watchdog = null;
       if (!document.hidden && watched && !watched.settled) {
         watched.verdict = true;
-        log('WATCHDOG: no hop yet after ' + WATCHDOG_MS + 'ms for ' + name
-          + '. If the system showed a confirmation or a browser chooser, this only means'
-          + ' it was not confirmed yet -- the hop is still being watched for.');
+        log('WATCHDOG: no hop after ' + WATCHDOG_MS + 'ms for ' + name
+          + ' -- the page never lost visibility, so nothing took over at all and this recipe'
+          + ' does nothing in this app. A late hop would still be reported below.');
       }
     }, WATCHDOG_MS);
   }
