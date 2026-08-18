@@ -7,6 +7,14 @@ and whether clipboard access works there.
 Open the hosted page inside the app under test, tap the buttons top to bottom and copy
 the log at the bottom.
 
+## Two pages
+
+- `index.html` — the raw diagnostic: every probe on its own button, nothing decided for you.
+- `flow.html` — the DEV-48595 step-1 gate as a working prototype. Open it and follow the
+  screen; it blocks or passes on its own and shows a live camera once access is granted.
+  The user journey it implements is drawn in [FLOW.md](FLOW.md). Append `?ua=<string>` to
+  simulate another app's user agent when testing detection on a desktop.
+
 No dependencies, no build step — `index.html` is the whole thing.
 
 ## Run locally

@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>DEV-48595 gate prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: #f2f4f5;
+    color: #1a1d1f;
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; margin: 24px 0 8px; }
+  h3 { font-size: 18px; margin: 0 0 8px; }
+  .card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .row { display: block; border-bottom: 1px solid #eef0f1; padding: 6px 0; }
+  .row:last-child { border-bottom: 0; }
+  .k { color: #6b7280; font-size: 13px; }
+  .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+  .ok { color: #067647; font-weight: 600; }
+  .no { color: #b42318; font-weight: 600; }
+  button {
+    display: block;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 15px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: #ffcf10;
+    color: #1a1d1f;
+    font-size: 17px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    -webkit-appearance: none;
+  }
+  button.ghost { background: #fff; border: 2px solid #ffcf10; }
+  button.quiet { background: #e5e7eb; font-size: 15px; font-weight: 500; }
+  button[disabled] { opacity: .55; }
+  input, textarea {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #fff;
+    color: #1a1d1f;
+  }
+  textarea { height: 220px; white-space: pre; }
+  .fake-field { font-family: inherit; margin-bottom: 10px; }
+  .video { display: block; width: 100%; height: 200px; margin: 10px 0 0; border-radius: 8px; background: #111; object-fit: cover; }
+  #log { font-size: 14px; }
+  .note { font-size: 13px; color: #6b7280; margin: 6px 0 0; }
+  .hint { font-size: 14px; margin: 0 0 10px; }
+  .banner { border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; font-size: 14px; font-weight: 600; }
+  .banner.pass { background: #e7f6ec; color: #067647; }
+  .banner.block { background: #fdecea; color: #b42318; }
+  .hidden { display: none !important; }
+  .tag { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #e5e7eb; }
+</style>
+</head>
+<body>
+
+<h1>DEV-48595 gate prototype</h1>
+<p class="note">The whole step-1 gate, end to end. Open it in each app and just follow the screen — no button hunting. Copy the log at the bottom and say which app you used: on Android the user agent cannot tell Facebook from Messenger.</p>
+
+<div id="verdict"></div>
+
+<div class="card" id="screenBlocked">
+  <h3 id="blockedTitle">One more thing</h3>
+  <p class="hint" id="blockedText">Checking whether this app lets the page use the camera…</p>
+
+  <button id="btnCheck">Check camera access</button>
+
+  <button id="btnEscape" class="ghost hidden"></button>
+
+  <p class="hint" id="linkHint">If the button did not work, copy the link and paste it into your browser.</p>
+  <input id="url" readonly>
+  <button id="btnCopy" class="quiet" style="margin-top:10px">Copy link</button>
+</div>
+
+<div class="card hidden" id="screenForm">
+  <h3>Registration step 1</h3>
+  <p class="hint">The gate let you through, so this is where the real form would be.</p>
+  <input class="fake-field" placeholder="Mobile number" inputmode="numeric">
+  <button>Get verification code</button>
+  <video id="video" class="video hidden" autoplay playsinline muted></video>
+  <p class="note" id="videoNote"></p>
+</div>
+
+<h2>What the gate saw</h2>
+<div class="card" id="detect"></div>
+
+<h2>Log</h2>
+<div class="card">
+  <textarea id="log" readonly></textarea>
+  <button id="btnCopyLog" class="quiet" style="margin-top:10px">Copy the whole log</button>
+  <button id="btnRestart" class="quiet">Restart the gate</button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var BUILD = 1;
+  var CAMERA_TIMEOUT_MS = 8000;
+  var LEAVE_WATCHDOG_MS = 1500;
+
+  var IN_APP_BROWSERS = {
+    FACEBOOK: 'Facebook',
+    MESSENGER: 'Messenger',
+    INSTAGRAM: 'Instagram',
+    TIKTOK: 'TikTok',
+    WECHAT: 'WeChat'
+  };
+
+  var CRAWLER_PATTERN = /bot\b|spider|crawler|externalhit|externalagent/i;
+  var CRAWLER_LOOKALIKE_PATTERN = /\bcubot\b/gi;
+
+  var IN_APP_BROWSER_PATTERNS = [
+    { name: IN_APP_BROWSERS.MESSENGER, pattern: /\bMessenger(ForiOS|LiteForiOS)\b|FB_IAB\/Orca-Android/i },
+    { name: IN_APP_BROWSERS.FACEBOOK, pattern: /\bFB\w+\/|\bMetaIAB\b/i },
+    { name: IN_APP_BROWSERS.INSTAGRAM, pattern: /\bInstagram/i },
+    { name: IN_APP_BROWSERS.TIKTOK, pattern: /musical_ly|Bytedance|TikTok/i },
+    { name: IN_APP_BROWSERS.WECHAT, pattern: /\bMicroMessenger\//i }
+  ];
+
+  var IOS_DEVICE_PATTERN = /iPhone|iPad|iPod/i;
+  var SAFARI_VERSION_TOKEN = /\bVersion\//i;
+  var IOS_BROWSER_TOKEN = /\b(CriOS|FxiOS|EdgiOS|OPiOS|OPT|YaBrowser|Ddg|DuckDuckGo|Brave|Coast)\//i;
+
+  var INTENT_SUFFIX = '#Intent;scheme=https;action=android.intent.action.VIEW;'
+    + 'category=android.intent.category.BROWSABLE;end';
+
+  var logEl = document.getElementById('log');
+  var verdictEl = document.getElementById('verdict');
+  var detectEl = document.getElementById('detect');
+  var blockedEl = document.getElementById('screenBlocked');
+  var formEl = document.getElementById('screenForm');
+  var blockedTitle = document.getElementById('blockedTitle');
+  var blockedText = document.getElementById('blockedText');
+  var btnCheck = document.getElementById('btnCheck');
+  var btnEscape = document.getElementById('btnEscape');
+  var linkHint = document.getElementById('linkHint');
+  var urlEl = document.getElementById('url');
+  var videoEl = document.getElementById('video');
+  var videoNote = document.getElementById('videoNote');
+
+  var stream = null;
+  var settled = false;
+
+  function pad(value) { return value < 10 ? '0' + value : '' + value; }
+
+  function stamp() {
+    var d = new Date();
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
+      + '.' + (d.getMilliseconds() + 1000).toString().slice(1);
+  }
+
+  function log(message) {
+    logEl.value += stamp() + '  ' + message + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function show(el) { el.classList.remove('hidden'); }
+  function hide(el) { el.classList.add('hidden'); }
+
+  function isCrawler(ua) {
+    return CRAWLER_PATTERN.test(ua.replace(CRAWLER_LOOKALIKE_PATTERN, ''));
+  }
+
+  function detectInAppBrowser(ua) {
+    if (!ua || isCrawler(ua)) return null;
+    for (var i = 0; i < IN_APP_BROWSER_PATTERNS.length; i++) {
+      if (IN_APP_BROWSER_PATTERNS[i].pattern.test(ua)) return IN_APP_BROWSER_PATTERNS[i].name;
+    }
+    return null;
+  }
+
+  function looksLikeUnbrandedIOSWebView(ua) {
+    if (!ua || isCrawler(ua)) return false;
+    if (!IOS_DEVICE_PATTERN.test(ua)) return false;
+    if (SAFARI_VERSION_TOKEN.test(ua)) return false;
+    return !IOS_BROWSER_TOKEN.test(ua);
+  }
+
+  function overriddenUserAgent() {
+    var match = window.location.search.match(/[?&]ua=([^&]*)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  var spoofedUa = overriddenUserAgent();
+  var ua = spoofedUa || navigator.userAgent || '';
+  var inAppBrowser = detectInAppBrowser(ua);
+  var unbrandedIOSWebView = !inAppBrowser && looksLikeUnbrandedIOSWebView(ua);
+  var suspectWebView = !!inAppBrowser || unbrandedIOSWebView;
+  var isIOS = IOS_DEVICE_PATTERN.test(ua);
+  var isAndroid = /Android/i.test(ua);
+
+  function row(key, value) {
+    return '<div class="row"><div class="k">' + key + '</div><div class="v">' + value + '</div></div>';
+  }
+
+  function yesNo(value) {
+    return '<span class="' + (value ? 'ok' : 'no') + '">' + (value ? 'yes' : 'no') + '</span>';
+  }
+
+  function banner(kind, text) {
+    verdictEl.innerHTML = '<div class="banner ' + kind + '">' + text + '</div>';
+  }
+
+  function queryCameraPermission() {
+    if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
+      return Promise.resolve('unsupported');
+    }
+    try {
+      return navigator.permissions.query({ name: 'camera' }).then(
+        function (status) { return status.state; },
+        function (error) { return 'unsupported:' + (error && error.name ? error.name : 'rejected'); }
+      );
+    } catch (error) {
+      return Promise.resolve('unsupported:threw');
+    }
+  }
+
+  function openCamera() {
+    var md = navigator.mediaDevices;
+    if (!md || typeof md.getUserMedia !== 'function') {
+      return Promise.resolve({ outcome: 'missing-api', ms: 0 });
+    }
+
+    var started = new Date().getTime();
+    var done = false;
+
+    return new Promise(function (resolve) {
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        resolve({ outcome: 'timeout', ms: new Date().getTime() - started });
+      }, CAMERA_TIMEOUT_MS);
+
+      md.getUserMedia({ video: true }).then(function (opened) {
+        if (done) {
+          opened.getVideoTracks().forEach(function (track) { track.stop(); });
+          return;
+        }
+        done = true;
+        clearTimeout(timer);
+        resolve({ outcome: 'granted', ms: new Date().getTime() - started, stream: opened });
+      }, function (error) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve({
+          outcome: 'rejected',
+          ms: new Date().getTime() - started,
+          name: error && error.name ? error.name : 'unknown'
+        });
+      });
+    });
+  }
+
+  function pageUrl() {
+    return window.location.href;
+  }
+
+  function escapeTarget() {
+    if (isAndroid) {
+      var loc = window.location;
+      return {
+        label: 'Open in browser',
+        url: 'intent://' + loc.host + (loc.pathname || '/') + (loc.search || '') + INTENT_SUFFIX,
+        kind: 'intent'
+      };
+    }
+    if (isIOS && inAppBrowser === IN_APP_BROWSERS.FACEBOOK) {
+      return { label: 'Open in Safari', url: 'x-safari-' + pageUrl(), kind: 'x-safari-https' };
+    }
+    if (isIOS && inAppBrowser === IN_APP_BROWSERS.INSTAGRAM) {
+      return {
+        label: 'Open in Chrome',
+        url: pageUrl().replace(/^https/, 'googlechromes'),
+        kind: 'googlechromes'
+      };
+    }
+    return null;
+  }
+
+  function watchForLeaving(kind) {
+    var left = false;
+
+    function onGone() {
+      if (left) return;
+      left = true;
+      log('ESCAPE (' + kind + ') -- page went hidden, the hop worked');
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) onGone();
+    });
+    window.addEventListener('pagehide', onGone);
+
+    setTimeout(function () {
+      if (left) return;
+      log('ESCAPE (' + kind + ') -- still here after ' + LEAVE_WATCHDOG_MS
+        + 'ms, the hop did NOT work; the link is the only way out');
+    }, LEAVE_WATCHDOG_MS);
+  }
+
+  function attachVideo(opened, note) {
+    stream = opened;
+    if ('srcObject' in videoEl) {
+      videoEl.srcObject = opened;
+    } else if (window.URL && typeof window.URL.createObjectURL === 'function') {
+      videoEl.src = window.URL.createObjectURL(opened);
+    } else {
+      log('VIDEO cannot be attached -- no srcObject and no createObjectURL');
+    }
+    var playing = videoEl.play();
+    if (playing && typeof playing.catch === 'function') {
+      playing.catch(function (error) {
+        log('VIDEO play() rejected: ' + (error && error.name ? error.name : error));
+      });
+    }
+    show(videoEl);
+    videoNote.textContent = note;
+    var track = opened.getVideoTracks()[0];
+    log('VIDEO live -- ' + (track && track.label ? track.label : '(no label)'));
+  }
+
+  function passThrough(reason) {
+    if (settled) return;
+    settled = true;
+    hide(blockedEl);
+    show(formEl);
+    banner('pass', 'Passed the gate: ' + reason);
+    log('GATE PASS -- ' + reason);
+  }
+
+  function blockWith(title, text) {
+    show(blockedEl);
+    hide(formEl);
+    blockedTitle.textContent = title;
+    blockedText.textContent = text;
+  }
+
+  function showBlocked(permissionState) {
+    banner('block', 'Blocked: webview detected and camera access is not granted');
+    log('GATE BLOCK -- permissions.query=' + permissionState);
+
+    blockWith(
+      'One more thing',
+      'You are browsing inside an app. To finish signing up you will need to photograph your ID,'
+        + ' so let us check the camera works here first.'
+    );
+
+    var target = escapeTarget();
+    if (target) {
+      btnEscape.textContent = target.label;
+      show(btnEscape);
+      log('ESCAPE button available: ' + target.kind);
+    } else {
+      hide(btnEscape);
+      log('ESCAPE button not offered here -- no scheme works in this app, link only');
+    }
+  }
+
+  function showCameraUnavailable(detail) {
+    hide(btnCheck);
+    banner('block', 'Blocked: the camera is not available in this app');
+    blockWith(
+      'The camera is not available here',
+      'This app does not let the page use the camera, so signing up cannot be finished here.'
+        + ' Open the page in your phone browser to continue.'
+    );
+    linkHint.textContent = 'If the button did not work, copy the link and paste it into your browser.';
+    log('CAMERA UNAVAILABLE -- ' + detail);
+  }
+
+  function onCheckTap() {
+    btnCheck.disabled = true;
+    btnCheck.textContent = 'Checking…';
+    log('CHECK tapped -- calling getUserMedia, watchdog at ' + CAMERA_TIMEOUT_MS + 'ms');
+
+    openCamera().then(function (result) {
+      if (result.outcome === 'granted') {
+        log('CHECK granted after ' + result.ms + 'ms');
+        passThrough('the client allowed the camera');
+        attachVideo(result.stream, 'Live camera, proving the grant is real.');
+        return;
+      }
+
+      if (result.outcome === 'rejected') {
+        log('CHECK rejected after ' + result.ms + 'ms -- ' + result.name
+          + (result.ms < 400
+            ? ' (fast, no prompt was shown: blocked by the app)'
+            : ' (slow: the client most likely tapped deny)'));
+        showCameraUnavailable('rejected ' + result.name + ' after ' + result.ms + 'ms');
+        return;
+      }
+
+      if (result.outcome === 'timeout') {
+        log('CHECK never answered in ' + result.ms + 'ms -- neither resolve nor reject,'
+          + ' the Messenger-on-Android case');
+        showCameraUnavailable('no answer in ' + result.ms + 'ms');
+        return;
+      }
+
+      log('CHECK impossible -- getUserMedia is not present at all');
+      showCameraUnavailable('getUserMedia missing');
+    });
+  }
+
+  function onEscapeTap() {
+    var target = escapeTarget();
+    if (!target) return;
+    log('ESCAPE tap -- ' + target.kind + ' -> ' + target.url);
+    watchForLeaving(target.kind);
+    window.location.href = target.url;
+  }
+
+  function copyViaExecCommand(text) {
+    if (typeof document.execCommand !== 'function' || !document.body) return false;
+
+    var input = document.createElement('textarea');
+    input.value = text;
+    input.setAttribute('readonly', 'readonly');
+    input.contentEditable = 'true';
+    input.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:120px;'
+      + 'font-size:16px;opacity:0;pointer-events:none;';
+    document.body.appendChild(input);
+
+    var copied = false;
+    try {
+      input.focus();
+      input.setSelectionRange(0, text.length);
+      copied = document.execCommand('copy') === true;
+    } catch (error) {
+      copied = false;
+    }
+
+    document.body.removeChild(input);
+    return copied;
+  }
+
+  function onCopyTap() {
+    var text = pageUrl();
+    var button = document.getElementById('btnCopy');
+
+    function done(succeeded, how) {
+      log('COPY ' + (succeeded ? 'reported success' : 'FAILED') + ' via ' + how);
+      button.textContent = succeeded ? 'Link copied' : 'Select the link above and copy it';
+      setTimeout(function () { button.textContent = 'Copy link'; }, 4000);
+    }
+
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text).then(
+        function () { done(true, 'clipboard.writeText'); },
+        function () { done(copyViaExecCommand(text), 'execCommand after writeText failed'); }
+      );
+      return;
+    }
+
+    done(copyViaExecCommand(text), 'execCommand');
+  }
+
+  function runGate() {
+    settled = false;
+
+    if (!suspectWebView) {
+      passThrough('not a webview, the page stays out of the way');
+      return;
+    }
+
+    log('GATE -- webview suspected (' + (inAppBrowser || 'unbranded iOS') + '), querying permission');
+
+    queryCameraPermission().then(function (state) {
+      log('GATE permissions.query -> ' + state);
+
+      if (state === 'granted') {
+        passThrough('the camera was already granted');
+        openCamera().then(function (result) {
+          if (result.outcome === 'granted') {
+            attachVideo(result.stream, 'Live camera. Prototype only — the real page would not open it here.');
+          } else {
+            log('GRANTED but the stream did not open: ' + result.outcome);
+          }
+        });
+        return;
+      }
+
+      showBlocked(state);
+    });
+  }
+
+  urlEl.value = pageUrl();
+
+  detectEl.innerHTML = ''
+    + row('user agent', ua)
+    + row('named in-app browser', inAppBrowser ? '<span class="no">' + inAppBrowser + '</span>' : '<span class="ok">none</span>')
+    + row('unbranded iOS webview', yesNo(unbrandedIOSWebView))
+    + row('gate applies', yesNo(suspectWebView))
+    + row('platform', isIOS ? 'iOS' : (isAndroid ? 'Android' : 'other'))
+    + row('escape scheme', escapeTarget() ? escapeTarget().kind : '<span class="no">none works here</span>');
+
+  log('page loaded -- FLOW BUILD ' + BUILD);
+  if (spoofedUa) log('!! user agent overridden by ?ua= -- detection below is a simulation');
+  log('ua: ' + ua);
+  log('detected=' + (inAppBrowser || 'none') + ' unbrandedIOSWebView=' + unbrandedIOSWebView
+    + ' platform=' + (isIOS ? 'iOS' : (isAndroid ? 'Android' : 'other')));
+  log('secureContext=' + window.isSecureContext);
+
+  btnCheck.addEventListener('click', onCheckTap);
+  btnEscape.addEventListener('click', onEscapeTap);
+  document.getElementById('btnCopy').addEventListener('click', onCopyTap);
+
+  document.getElementById('btnCopyLog').addEventListener('click', function () {
+    logEl.focus();
+    logEl.setSelectionRange(0, logEl.value.length);
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(logEl.value).then(function () {}, function () {});
+    } else {
+      copyViaExecCommand(logEl.value);
+    }
+    log('--- TAP copy log ---');
+  });
+
+  document.getElementById('btnRestart').addEventListener('click', function () {
+    if (stream) {
+      stream.getVideoTracks().forEach(function (track) { track.stop(); });
+      stream = null;
+    }
+    hide(videoEl);
+    videoNote.textContent = '';
+    btnCheck.disabled = false;
+    btnCheck.textContent = 'Check camera access';
+    show(btnCheck);
+    log('--- RESTART ---');
+    runGate();
+  });
+
+  urlEl.addEventListener('focus', function () {
+    try {
+      urlEl.setSelectionRange(0, urlEl.value.length);
+    } catch (error) {
+      urlEl.select();
+    }
+  });
+
+  runGate();
+}());
+</script>
+
+</body>
+</html>
