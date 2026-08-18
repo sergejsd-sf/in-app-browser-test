@@ -139,7 +139,7 @@
   var WATCHDOG_MS = 8000;
   var COPY_SETTLE_MS = 1500;
   var WIDGET_SETTLE_MS = 10000;
-  var BUILD = 16;
+  var BUILD = 17;
 
   var ua = navigator.userAgent || '';
   var lines = [];
@@ -250,19 +250,20 @@
     });
   }
 
-  function logCameraPermission() {
+  function logCameraPermission(when) {
+    var prefix = 'CAMERA permissions.query' + (when ? ' (' + when + ')' : '');
     if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
-      log('CAMERA permissions.query unavailable here');
+      log(prefix + ' unavailable here');
       return;
     }
     try {
       navigator.permissions.query({ name: 'camera' }).then(function (status) {
-        log('CAMERA permissions.query -> ' + status.state);
+        log(prefix + ' -> ' + status.state);
       }, function (error) {
-        log('CAMERA permissions.query rejected: ' + (error && error.name ? error.name : error));
+        log(prefix + ' rejected: ' + (error && error.name ? error.name : error));
       });
     } catch (error) {
-      log('CAMERA permissions.query threw: ' + (error && error.name ? error.name : error));
+      log(prefix + ' threw: ' + (error && error.name ? error.name : error));
     }
   }
 
@@ -336,9 +337,8 @@
   log('UA RULE -- hasVersion=' + signals.hasVersion + ' hasSafari=' + signals.hasSafari
     + ' browserToken=' + signals.browserToken + ' => ' + signals.verdict);
   log('ANDROID SURFACE -- wv token=' + signals.androidWebview + ' IABMV=' + signals.metaBrowser
-    + (signals.androidWebview && !signals.metaBrowser
-      ? ' <-- plain Android WebView, the surface where getUserMedia hangs'
-      : ''));
+    + ' (markers only: Instagram is also a wv surface and its camera works,'
+    + ' so wv on its own predicts nothing)');
   log('viewport -- innerH=' + extra.innerH + ' outerH=' + extra.outerH
     + ' screenH=' + extra.screenH + ' vvHeight=' + extra.vvHeight);
   log('referrer=' + extra.referrer);
@@ -490,7 +490,9 @@
 
     var settled = false;
     setTimeout(function () {
-      if (!settled) log('CAMERA getUserMedia never answered after 10s (prompt pending or swallowed)');
+      if (settled) return;
+      log('CAMERA getUserMedia never answered after 10s (prompt pending or swallowed)');
+      logCameraPermission('while getUserMedia hangs');
     }, 10000);
 
     md.getUserMedia({ video: true }).then(function (stream) {
@@ -583,6 +585,7 @@
         log('WIDGET [' + step + '] getUserMedia NEVER ANSWERED after ' + WIDGET_SETTLE_MS
           + 'ms -- no resolve, no reject, nothing to catch;'
           + ' this is the white screen the app cannot even report');
+        logCameraPermission('while the widget hangs');
       }, WIDGET_SETTLE_MS);
 
       md.getUserMedia(constraints).then(function (stream) {
