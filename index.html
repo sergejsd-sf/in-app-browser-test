@@ -90,7 +90,7 @@
   <button id="btnWidget">K &middot; document step (back camera)</button>
   <button id="btnWidgetSelfie" class="ghost">L &middot; selfie step (front camera)</button>
   <video id="widgetVideo" class="widget-video" autoplay playsinline muted></video>
-  <p class="note">Same sequence as the real widget: getUserMedia with the app's own constraints (ideal 1920&times;1080), then srcObject, then play(). K uses the back camera like the document steps, L the front one like the selfie step.</p>
+  <p class="note">Same sequence as the real widget: getUserMedia with the app's own constraints (ideal 1920&times;1080), then srcObject, then play(). K uses the back camera like the document steps, L the front one like the selfie step. Switching releases the previous camera first and then reports which one it actually got &mdash; if a plain <code>facingMode</code> is ignored it retries with an exact one.</p>
 </div>
 
 <h2>Leave the webview (Android)</h2>
@@ -140,7 +140,7 @@
   ];
 
   var WATCHDOG_MS = 8000;
-  var BUILD = 9;
+  var BUILD = 11;
 
   var ua = navigator.userAgent || '';
   var lines = [];
@@ -511,68 +511,159 @@
     });
   });
 
-  function runWidgetReplica(facingMode, step) {
+  var CAMERA_RELEASE_MS = 300;
+  var widgetStream = null;
+  var widgetTimers = [];
+  var widgetLabel = '';
+  var widgetFacing = '';
+  var widgetRun = 0;
+  var widgetCameraList = '';
+
+  function widgetLater(fn, ms) {
+    widgetTimers.push(setTimeout(fn, ms));
+  }
+
+  function releaseWidgetCamera(reason) {
+    widgetTimers.forEach(function (id) { clearTimeout(id); });
+    widgetTimers = [];
+
+    var video = document.getElementById('widgetVideo');
+    if (video) video.srcObject = null;
+
+    if (!widgetStream) return;
+
+    widgetStream.getTracks().forEach(function (t) { t.stop(); });
+    widgetStream = null;
+    log('WIDGET released the camera -- ' + reason);
+  }
+
+  function logVisibleCameras(md) {
+    if (typeof md.enumerateDevices !== 'function') {
+      log('WIDGET enumerateDevices unavailable -- cannot list the cameras');
+      return;
+    }
+    md.enumerateDevices().then(function (devices) {
+      var cams = devices.filter(function (d) { return d.kind === 'videoinput'; });
+      var listed = cams.length + ' -- ' + (cams.map(function (d) {
+        return d.label || '(unlabelled ' + String(d.deviceId).slice(0, 6) + ')';
+      }).join(' | ') || 'none');
+      if (listed === widgetCameraList) return;
+      widgetCameraList = listed;
+      log('WIDGET cameras visible: ' + listed);
+    }, function (error) {
+      log('WIDGET enumerateDevices failed -- ' + (error && error.name ? error.name : 'unknown'));
+    });
+  }
+
+  function runWidgetReplica(facingMode, step, exact) {
     var md = navigator.mediaDevices;
     if (!md || typeof md.getUserMedia !== 'function') {
       log('WIDGET getUserMedia absent -- nothing to replicate');
       return;
     }
 
+    var run = ++widgetRun;
+    releaseWidgetCamera(exact
+      ? 'retrying the ' + step + ' step with an exact constraint'
+      : 'starting the ' + step + ' step');
+
     var constraints = {
       video: {
-        facingMode: facingMode,
+        facingMode: exact ? { exact: facingMode } : facingMode,
         width: { ideal: 1920 },
         height: { ideal: 1080 },
       },
     };
 
-    log('WIDGET [' + step + '] constraints: facingMode=' + facingMode
-      + ', ideal 1920x1080 (the app defaults for this step)');
+    log('WIDGET [' + step + '] constraints: facingMode='
+      + (exact ? '{ exact: ' + facingMode + ' }' : facingMode + ' (plain, i.e. a hint)')
+      + ', ideal 1920x1080' + (exact ? '' : ' -- the app defaults for this step'));
 
-    md.getUserMedia(constraints).then(function (stream) {
-      var track = stream.getVideoTracks()[0];
-      var settings = track && typeof track.getSettings === 'function' ? track.getSettings() : {};
-      log('WIDGET getUserMedia OK -- label: ' + ((track && track.label) || '(none)')
-        + ', granted ' + settings.width + 'x' + settings.height
-        + ', facingMode=' + settings.facingMode);
+    widgetLater(function () {
+      md.getUserMedia(constraints).then(function (stream) {
+        if (run !== widgetRun) {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          log('WIDGET a newer step started while this one was opening -- stream discarded');
+          return;
+        }
 
-      var video = document.getElementById('widgetVideo');
-      video.setAttribute('playsinline', 'playsinline');
-      video.muted = true;
-      video.srcObject = stream;
+        widgetStream = stream;
 
-      var playResult = video.play();
+        var track = stream.getVideoTracks()[0];
+        var settings = track && typeof track.getSettings === 'function' ? track.getSettings() : {};
+        var label = (track && track.label) || '';
 
-      if (!playResult || typeof playResult.then !== 'function') {
-        log('WIDGET video.play() returned no promise here -- rejection cannot be observed');
-      } else {
-        playResult.then(function () {
-          log('WIDGET video.play() RESOLVED');
-        }, function (error) {
-          log('WIDGET video.play() REJECTED -- ' + (error && error.name ? error.name : 'unknown')
-            + ': ' + (error && error.message ? error.message : '')
-            + '  <-- the app never catches this, so it shows a white screen');
-        });
-      }
+        log('WIDGET getUserMedia OK -- label: ' + (label || '(none)')
+          + ', granted ' + settings.width + 'x' + settings.height
+          + ', facingMode=' + (settings.facingMode || '(not reported)'));
+        logVisibleCameras(md);
 
-      setTimeout(function () {
-        log('WIDGET after 1500ms -- readyState=' + video.readyState
-          + ' videoWidth=' + video.videoWidth + ' videoHeight=' + video.videoHeight
-          + ' currentTime=' + video.currentTime.toFixed(2) + ' paused=' + video.paused);
-        log(video.videoWidth === 0 || video.currentTime === 0
-          ? 'WIDGET VERDICT: no frames decoded -- the white screen is reproduced here'
-          : 'WIDGET VERDICT: frames are flowing -- a picture should be visible above');
-      }, 1500);
+        var switchExpected = !!widgetFacing && widgetFacing !== facingMode;
+        var wrongCamera = settings.facingMode
+          ? settings.facingMode !== facingMode
+          : (switchExpected && !!label && label === widgetLabel);
 
-      setTimeout(function () {
-        stream.getTracks().forEach(function (t) { t.stop(); });
-        video.srcObject = null;
-        log('WIDGET camera released');
-      }, 12000);
-    }, function (error) {
-      log('WIDGET getUserMedia FAILED -- ' + (error && error.name ? error.name : 'unknown')
-        + ': ' + (error && error.message ? error.message : ''));
-    });
+        if (wrongCamera && !exact) {
+          log('WIDGET SWITCH FAILED -- asked for ' + facingMode + ', got '
+            + (settings.facingMode || 'the same device again')
+            + ' -- retrying with an exact constraint');
+          runWidgetReplica(facingMode, step, true);
+          return;
+        }
+
+        widgetLabel = label;
+        widgetFacing = facingMode;
+
+        if (wrongCamera) {
+          log('WIDGET SWITCH IMPOSSIBLE -- exact ' + facingMode + ' still gave '
+            + (settings.facingMode || label || 'the same device')
+            + ' -- this webview does not switch cameras');
+        } else if (switchExpected) {
+          log('WIDGET SWITCHED to the ' + facingMode + '-facing camera'
+            + (exact ? ' (only the exact constraint worked)' : ''));
+        }
+
+        var video = document.getElementById('widgetVideo');
+        video.setAttribute('playsinline', 'playsinline');
+        video.muted = true;
+        video.srcObject = stream;
+
+        var playResult = video.play();
+
+        if (!playResult || typeof playResult.then !== 'function') {
+          log('WIDGET video.play() returned no promise here -- rejection cannot be observed');
+        } else {
+          playResult.then(function () {
+            log('WIDGET video.play() RESOLVED');
+          }, function (error) {
+            log('WIDGET video.play() REJECTED -- ' + (error && error.name ? error.name : 'unknown')
+              + ': ' + (error && error.message ? error.message : '')
+              + '  <-- the app never catches this, so it shows a white screen');
+          });
+        }
+
+        widgetLater(function () {
+          log('WIDGET after 1500ms -- readyState=' + video.readyState
+            + ' videoWidth=' + video.videoWidth + ' videoHeight=' + video.videoHeight
+            + ' currentTime=' + video.currentTime.toFixed(2) + ' paused=' + video.paused);
+          log(video.videoWidth === 0 || video.currentTime === 0
+            ? 'WIDGET VERDICT: no frames decoded -- the white screen is reproduced here'
+            : 'WIDGET VERDICT: frames are flowing -- a picture should be visible above');
+        }, 1500);
+
+        widgetLater(function () {
+          releaseWidgetCamera('12s auto-release by the test page');
+        }, 12000);
+      }, function (error) {
+        var name = error && error.name ? error.name : 'unknown';
+        log('WIDGET getUserMedia FAILED -- ' + name
+          + ': ' + (error && error.message ? error.message : ''));
+        if (exact && name === 'OverconstrainedError') {
+          log('WIDGET VERDICT: this webview reports no ' + facingMode
+            + '-facing camera at all, so the step cannot work here');
+        }
+      });
+    }, CAMERA_RELEASE_MS);
   }
 
   onTap('btnWidget', 'K widget replica (document)', function () {
