@@ -80,6 +80,7 @@
   <button id="btnCheck">Check camera access</button>
 
   <button id="btnEscape" class="ghost hidden"></button>
+  <p class="note hidden" id="escapeNote">That did not work — this app kept you inside. Use the link below.</p>
 
   <p class="hint" id="linkHint">If the button did not work, copy the link and paste it into your browser.</p>
   <input id="url" readonly>
@@ -107,7 +108,7 @@
 (function () {
   'use strict';
 
-  var BUILD = 3;
+  var BUILD = 4;
   var CAMERA_TIMEOUT_MS = 8000;
   var LEAVE_WATCHDOG_MS = 1500;
 
@@ -147,6 +148,7 @@
   var btnCheck = document.getElementById('btnCheck');
   var btnEscape = document.getElementById('btnEscape');
   var linkHint = document.getElementById('linkHint');
+  var escapeNote = document.getElementById('escapeNote');
   var urlEl = document.getElementById('url');
   var videoEl = document.getElementById('video');
   var videoNote = document.getElementById('videoNote');
@@ -307,9 +309,8 @@
 
     if (index >= attempts.length) {
       log('ESCAPE -- every scheme fell through, the link is the only way out of this app');
-      btnEscape.textContent = 'That did not work';
-      btnEscape.disabled = true;
-      linkHint.textContent = 'Copy the link below and paste it into your browser.';
+      btnEscape.textContent = 'Open in browser';
+      show(escapeNote);
       return;
     }
 
@@ -375,7 +376,7 @@
     var attempts = escapeAttempts();
     if (attempts.length) {
       btnEscape.textContent = 'Open in browser';
-      btnEscape.disabled = false;
+      hide(escapeNote);
       show(btnEscape);
       log('ESCAPE chain ready: ' + attempts.map(function (a) { return a.kind; }).join(' -> '));
     } else {
@@ -434,6 +435,7 @@
     var attempts = escapeAttempts();
     if (!attempts.length) return;
     leftTheApp = false;
+    hide(escapeNote);
     btnEscape.textContent = 'Opening…';
     log('ESCAPE tap -- chain of ' + attempts.length + ', ' + LEAVE_WATCHDOG_MS + 'ms apart');
     runEscapeChain(attempts, 0);
