@@ -71,7 +71,7 @@
 <body>
 
 <h1>In-app browser escape test</h1>
-<p class="note">Open this page inside Facebook / Instagram / Messenger / TikTok / Viber and work top to bottom. Every tap is logged at the bottom — copy the log and send it back.</p>
+<p class="note">Open this page inside Facebook / Instagram / Messenger / TikTok / Viber and work top to bottom. Every tap is logged at the bottom — copy the log and send it back, <b>and say which app you opened it in</b>: on Android the user agent cannot tell Facebook from Messenger, so the log alone cannot say either.</p>
 <h2>Detection</h2>
 <div class="card" id="detect"></div>
 <details class="card">
@@ -139,7 +139,7 @@
   var WATCHDOG_MS = 8000;
   var COPY_SETTLE_MS = 1500;
   var WIDGET_SETTLE_MS = 10000;
-  var BUILD = 15;
+  var BUILD = 16;
 
   var ua = navigator.userAgent || '';
   var lines = [];
@@ -327,7 +327,11 @@
   var cameraApi = cameraApiPresence();
 
   log('page loaded -- BUILD ' + BUILD + ' (buttons A, D, E, F, I, J, K, L)');
-  log('in-app browser (name patterns): ' + (detected || 'none') + ', platform: ' + plat);
+  log('in-app browser (name patterns): ' + (detected || 'none') + ', platform: ' + plat
+    + (detected === 'Facebook' && plat === 'android'
+      ? ' -- NOTE: Messenger on Android sends the same FB_IAB/FB4A token, so this name cannot'
+        + ' tell the two Meta apps apart. Say which app you opened this in.'
+      : ''));
   log('ua: ' + ua);
   log('UA RULE -- hasVersion=' + signals.hasVersion + ' hasSafari=' + signals.hasSafari
     + ' browserToken=' + signals.browserToken + ' => ' + signals.verdict);
