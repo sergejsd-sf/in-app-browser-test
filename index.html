@@ -138,7 +138,8 @@
 
   var WATCHDOG_MS = 8000;
   var COPY_SETTLE_MS = 1500;
-  var BUILD = 13;
+  var WIDGET_SETTLE_MS = 10000;
+  var BUILD = 15;
 
   var ua = navigator.userAgent || '';
   var lines = [];
@@ -215,6 +216,8 @@
       hasVersion: hasVersion,
       hasSafari: /Safari\//i.test(ua),
       browserToken: token ? token[1] : 'none',
+      androidWebview: / wv[;)]/i.test(ua),
+      metaBrowser: /IABMV\//i.test(ua),
       verdict: onIOS && !hasVersion && !token ? 'WEBVIEW' : 'real browser (or cannot tell)',
     };
   }
@@ -328,6 +331,10 @@
   log('ua: ' + ua);
   log('UA RULE -- hasVersion=' + signals.hasVersion + ' hasSafari=' + signals.hasSafari
     + ' browserToken=' + signals.browserToken + ' => ' + signals.verdict);
+  log('ANDROID SURFACE -- wv token=' + signals.androidWebview + ' IABMV=' + signals.metaBrowser
+    + (signals.androidWebview && !signals.metaBrowser
+      ? ' <-- plain Android WebView, the surface where getUserMedia hangs'
+      : ''));
   log('viewport -- innerH=' + extra.innerH + ' outerH=' + extra.outerH
     + ' screenH=' + extra.screenH + ' vvHeight=' + extra.vvHeight);
   log('referrer=' + extra.referrer);
@@ -564,8 +571,18 @@
       + (exact ? '{ exact: ' + facingMode + ' }' : facingMode + ' (plain, i.e. a hint)')
       + ', ideal 1920x1080' + (exact ? '' : ' -- the app defaults for this step'));
 
+    var settled = false;
+
     widgetLater(function () {
+      widgetLater(function () {
+        if (settled || run !== widgetRun) return;
+        log('WIDGET [' + step + '] getUserMedia NEVER ANSWERED after ' + WIDGET_SETTLE_MS
+          + 'ms -- no resolve, no reject, nothing to catch;'
+          + ' this is the white screen the app cannot even report');
+      }, WIDGET_SETTLE_MS);
+
       md.getUserMedia(constraints).then(function (stream) {
+        settled = true;
         if (run !== widgetRun) {
           stream.getTracks().forEach(function (t) { t.stop(); });
           log('WIDGET a newer step started while this one was opening -- stream discarded');
@@ -640,6 +657,7 @@
           releaseWidgetCamera('12s auto-release by the test page');
         }, 12000);
       }, function (error) {
+        settled = true;
         var name = error && error.name ? error.name : 'unknown';
         log('WIDGET getUserMedia FAILED -- ' + name
           + ': ' + (error && error.message ? error.message : ''));
@@ -735,7 +753,12 @@
       log('DIFFERENT from the page url -- either it holds the log, or the copy silently failed');
     }, function (error) {
       settled = true;
+      var name = error && error.name ? error.name : 'unknown';
       log('clipboard.readText rejected: ' + error);
+      if (name === 'NotAllowedError') {
+        log('READBACK DENIED -- this says nothing about the copy itself, which reported success;'
+          + ' reading the clipboard is simply not permitted here. Paste it somewhere to be sure.');
+      }
     });
   });
 
